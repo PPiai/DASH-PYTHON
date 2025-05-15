@@ -49,7 +49,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main {
-        background-color: #f9f9f9;
+        background-color: #000000 !important;
     }
     .stMetric {
         background-color: black;
