@@ -52,8 +52,9 @@ st.markdown("""
         background-color: #000000 !important;
     }
     .stMetric {
-        background-color: black;
+        background-color: gray;
         padding: 15px;
+        color: white;
         border-radius: 5px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
         border-bottom: 2px solid #ffffff;
@@ -68,7 +69,7 @@ st.markdown("""
         padding-top: 1rem;
     }
     h1, h2, h3 {
-        color: #2c3e50;
+        color: #ffffff !important;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 24px;
@@ -84,6 +85,8 @@ st.markdown("""
     }
     .stTabs [aria-selected="true"] {
         background-color: #ffffff;
+        color: black;
+        font-weight: 800;
         border-bottom: 2px solid #ffffff;
     }
     
@@ -118,7 +121,7 @@ st.markdown("""
     
     /* Melhorar o contraste dos cabeçalhos */
     .sidebar h1, .sidebar h2, .sidebar h3, .sidebar h4 {
-        color: #1e3a8a;
+        color: #ffffff;
         margin-bottom: 15px;
         padding-bottom: 5px;
         border-bottom: 2px solid #4e8cff;
@@ -159,6 +162,7 @@ class CarregadorDados:
     
     def __init__(self, url_google_ads: str, url_meta_ads: str):
         """Inicializar com endpoints da API"""
+        
         self.url_google_ads = url_google_ads
         self.url_meta_ads = url_meta_ads
         self.hora_ultima_atualizacao = None
@@ -1808,3 +1812,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
