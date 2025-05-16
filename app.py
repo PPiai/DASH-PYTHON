@@ -52,11 +52,11 @@ st.markdown("""
         background-color: #000000 !important;
     }
     .stMetric {
-        background-color: gray!important;
+        background-color: gray !important;
         padding: 15px;
         color: white;
         border-radius: 5px;
-        box-shadow: 0 1px 3px rgba(255,255,255,0.3), 0 1px 2px rgba(255,255,255,0.3);
+        box-shadow: 0 1px 3px rgba(255,255,255,0.3), 0 1px 2px rgba(255,255,255,0.3) !important;
         border-bottom: 2px solid #ffffff;
     }
     .stPlotlyChart {
