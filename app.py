@@ -3,15 +3,17 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import time
-import json
 import requests
-from typing import Dict, List, Tuple, Optional, Union
-import threading
-import numpy as np
+import json
+import time
+import os
+from io import StringIO
 import locale
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from statsmodels.tsa.arima.model import ARIMA
 
-# Configurar localização para o padrão brasileiro
+# Configurar localização para formato brasileiro
 try:
     locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
 except:
@@ -20,1796 +22,1808 @@ except:
     except:
         pass
 
-# Função para formatar valores no padrão brasileiro
-def formatar_valor_br(valor, prefixo="R$", casas_decimais=2):
-    try:
-        if pd.isna(valor):
-            return "-"
-        return f"{prefixo} {valor:,.{casas_decimais}f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except:
-        return f"{prefixo} {valor}"
-
-def formatar_numero_br(valor, casas_decimais=0):
-    try:
-        if pd.isna(valor):
-            return "-"
-        return f"{valor:,.{casas_decimais}f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except:
-        return f"{valor}"
-
 # Configuração da página
 st.set_page_config(
-    page_title="Painel de Desempenho de Anúncios",
+    page_title="Meta Ads Dashboard Farol",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Aplicar CSS personalizado para um visual limpo e profissional
+# CSS personalizado para estilização
 st.markdown("""
 <style>
-    .main {
-        background-color: #000000 !important;
-    }
-    .stMetric {
-        background-color: #898989 !important;
-        padding: 15px;
-        color: white;
+    .metric-card {
         border-radius: 5px;
-        box-shadow: 0 1px 3px rgba(255,255,255,0.3), 0 1px 2px rgba(255,255,255,0.3) !important;
-        border-bottom: 2px solid #ffffff;
+        padding: 15px;
+        margin: 10px 0;
     }
-    .stPlotlyChart {
-        background-color: white;
-        border-radius: 2px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
-        border-bottom: 2px solid #ffffff;
+    .metric-green {
+        background-color: rgba(0, 200, 0, 0.1);
+        border-left: 5px solid #00c800;
     }
-    .css-1d391kg {
-        padding-top: 1rem;
+    .metric-yellow {
+        background-color: rgba(255, 200, 0, 0.1);
+        border-left: 5px solid #ffc800;
     }
-    h1, h2, h3 {
-        color: #ffffff !important;
+    .metric-red {
+        background-color: rgba(255, 0, 0, 0.1);
+        border-left: 5px solid #ff0000;
     }
     .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
+        gap: 15px;
     }
     .stTabs [data-baseweb="tab"] {
         height: 50px;
         white-space: pre-wrap;
-        background-color: black;
-        border-bottom: 2px solid #ffffff;
-        border-radius: 4px 4px 0px 0px;
+        background-color: #000000;
+        border-radius: 4px 4px 0 0;
+        border-right: 1px solid rgba(255, 255, 255, 0.2);
+        border-top: 1px solid rgba(255, 255, 255, 0.2);
+        border-left: 1px solid rgba(255, 255, 255, 0.2);
         gap: 1px;
         padding: 10px;
     }
     .stTabs [aria-selected="true"] {
         background-color: #ffffff;
         color: black;
-        font-weight: 800;
-        border-bottom: 2px solid #ffffff;
     }
-    
-    /* Estilo melhorado para botões */
-    .stButton > button {
-        background-color: #000000;
-        color: white;
-        border: 2px solid #ffffff;
-        border-radius: 5px;
-        padding: 10px 15px;
-        font-weight: 800;
-        width: 100%;
-        margin-bottom: 10px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-        transition: all 0.3s;
-    }
-    
-    .stButton > button:hover {
-        background-color: #000000;
-        color: red;
-        border: 2px solid #ff0000;
-        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-        transform: translateY(-2px);
-    }
-
-    /* Adicionar uma borda clara ao final de cada seção */
-    .section-divider {
-        border-bottom: 1px solid #e0e0e0;
-        margin: 20px 0;
-        padding-bottom: 10px;
-    }
-    
-    /* Melhorar o contraste dos cabeçalhos */
-    .sidebar h1, .sidebar h2, .sidebar h3, .sidebar h4 {
-        color: #ffffff;
-        margin-bottom: 15px;
-        padding-bottom: 5px;
-        border-bottom: 2px solid #4e8cff;
-        display: inline-block;
-    }
-    
-    /* Estilo para as abas de navegação */
-    .main-nav {
+    .header-container {
         display: flex;
-        justify-content: center;
-        background-color: #000000;
-        gap: 10px;
-        margin-bottom: 20px;
+        justify-content: space-between;
+        align-items: center;
     }
-    
-    .nav-item {
-        background-color: #ffffff;
-        padding: 10px 20px;
+    .last-update {
+        font-size: 0.8rem;
+        color: #888;
+    }
+    .tooltip {
+        position: relative;
+        display: inline-block;
+        cursor: help;
+    }
+    .tooltip .tooltiptext {
+        visibility: hidden;
+        width: 250px;
+        background-color: #555;
+        color: #fff;
+        text-align: left;
+        border-radius: 6px;
+        padding: 10px;
+        position: absolute;
+        z-index: 1;
+        bottom: 125%;
+        left: 50%;
+        margin-left: -125px;
+        opacity: 0;
+        transition: opacity 0.3s;
+    }
+    .tooltip:hover .tooltiptext {
+        visibility: visible;
+        opacity: 1;
+    }
+    .delta-positive {
+        color: #00c800;
+    }
+    .delta-negative {
+        color: #ff0000;
+    }
+    .warning-red {
+        background-color: rgba(255, 0, 0, 0.1);
+        color: #ff0000;
+        padding: 10px;
         border-radius: 5px;
-        cursor: pointer;
-        text-align: center;
-        font-weight: bold;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-        transition: all 0.3s;
+        margin-bottom: 15px;
+        border-left: 5px solid #ff0000;
     }
-    
-    .nav-item:hover, .nav-item.active {
-        background-color: #4e8cff;
-        color: white;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    .warning-yellow {
+        background-color: rgba(255, 200, 0, 0.1);
+        color: #ffc800;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+        border-left: 5px solid #ffc800;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ===== Módulo de Carregamento de Dados =====
-class CarregadorDados:
-    """Classe para lidar com o carregamento e processamento de dados dos endpoints da API"""
-    
-    def __init__(self, url_google_ads: str, url_meta_ads: str):
-        """Inicializar com endpoints da API"""
-        
-        self.url_google_ads = url_google_ads
-        self.url_meta_ads = url_meta_ads
-        self.hora_ultima_atualizacao = None
-        self.dados = None
-        self.erro = None
-        
-    def buscar_dados(self, url: str) -> Optional[Dict]:
-        """Buscar dados da API com tratamento de erros"""
-        try:
-            resposta = requests.get(url, timeout=10)
-            resposta.raise_for_status()  # Gerar exceção para respostas 4XX/5XX
-            return resposta.json()
-        except requests.exceptions.Timeout:
-            self.erro = f"Erro de timeout ao conectar a {url}"
-            return None
-        except requests.exceptions.HTTPError as e:
-            self.erro = f"Erro HTTP: {e}"
-            return None
-        except requests.exceptions.ConnectionError:
-            self.erro = f"Erro de conexão ao conectar a {url}"
-            return None
-        except json.JSONDecodeError:
-            self.erro = f"Formato JSON inválido de {url}"
-            return None
-        except Exception as e:
-            self.erro = f"Erro inesperado: {str(e)}"
-            return None
-    
-    def processar_dados_windsor(self, dados: Dict, plataforma: str) -> pd.DataFrame:
-        """Processar dados do formato da API Windsor.ai"""
-        # Verificar se os dados existem e têm a estrutura esperada
-        if not dados or 'data' not in dados:
-            return pd.DataFrame()
-        
-        # Converter para DataFrame
-        df = pd.DataFrame(dados['data'])
-        
-        if df.empty:
-            return df
-        
-        # Renomear colunas para corresponder às expectativas do nosso painel
-        mapeamento_colunas = {
-            'campaign': 'nome_campanha',
-            'datasource': 'plataforma',
-            'date': 'data',
-            'clicks': 'cliques',
-            'spend': 'gasto',
-            'impressions': 'impressoes',
-            'ad_name': 'nome_anuncio',
-            'adset_name': 'nome_conjunto_anuncios',
-            'reach': 'alcance',
-            'actions_purchase': 'acoes_compra',
-            'action_values_omni_purchase': 'valor_acoes_compra',
-            'conversions': 'conversoes',
-            'conversion_value': 'valor_conversao'
+# Carregar dados das contas
+@st.cache_data(ttl=3600)
+def load_accounts():
+    # Em um cenário real, isso seria carregado de um banco de dados ou arquivo
+    contas = pd.DataFrame([
+    {"nome_cliente": "Resimaq", "conta_id": "act_995978674482822", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Marluvas", "conta_id": "act_937586130079158", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Aguia de Ouro", "conta_id": "act_930138122661830", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "SRT Transportes ", "conta_id": "act_913549057234070", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "HS Gold", "conta_id": "act_905719624940336", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Remo Fenut", "conta_id": "act_898336111347971", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "CTC", "conta_id": "act_860506788095972", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Hidraucambio", "conta_id": "act_859616951882800", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Ornare Semijóias", "conta_id": "act_841878016587031", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Clero Brasil", "conta_id": "act_838288521687758", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Italian Gastronomia", "conta_id": "act_814045333572501", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Agromann", "conta_id": "act_764715671633746", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Absoluta Incorporação", "conta_id": "act_743422994203639", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Café com Leite", "conta_id": "act_733072060715959", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Suruka", "conta_id": "act_694252122331708", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "SmartX", "conta_id": "act_679012503781785", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Zatta", "conta_id": "act_656032961789593", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Recoplast", "conta_id": "act_623122470618153", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Lefer", "conta_id": "act_617886166202496", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Sartori Auto Peças", "conta_id": "act_616436801130224", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "GTL", "conta_id": "act_602220500784998", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Nila Photography", "conta_id": "act_5837453393018571", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Casa dos Motores", "conta_id": "act_556908113899805", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "AJL", "conta_id": "act_5557603504330426", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Calvin Klein", "conta_id": "act_535788031261479", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "MF Peças", "conta_id": "act_531544614131498", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Stone Mall", "conta_id": "act_531409504089794", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "UV Line", "conta_id": "act_513209639246301", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Trisul", "conta_id": "act_496159270236236", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Trisul (JL)", "conta_id": "act_496159270236236", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Monnaie", "conta_id": "act_1328655617999318", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "MaqCenter", "conta_id": "act_470618307419362", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Brasil Piscis", "conta_id": "act_458704915937220", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Nutriquality", "conta_id": "act_439991594112145", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Marlin Autos ", "conta_id": "act_432026079386037", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Supranet", "conta_id": "act_422110711745409", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Highaus", "conta_id": "act_420443957644515", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Adapter Sistemas", "conta_id": "act_413912314603205", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Comam", "conta_id": "act_394120044591493", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Biovit", "conta_id": "act_3896030874057266", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Proinfo - FIA", "conta_id": "act_3577843515771052", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Bawer Motores", "conta_id": "act_346860261810268", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Extinseto", "conta_id": "act_3461207023864", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Bahls Odontologia", "conta_id": "act_341929899811752", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Makebetter", "conta_id": "act_3236627973136982", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Alcance B2B", "conta_id": "act_2904536849786560", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Alcance", "conta_id": "act_2904536849786560", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Mega Coffee", "conta_id": "act_282434177103318", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Logline", "conta_id": "act_2786386548206132", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Pluralquimica", "conta_id": "act_2488064127938269", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "RTT", "conta_id": "act_231030318338724", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Dziabas", "conta_id": "act_2281392792260986", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Repsol", "conta_id": "act_2232590890444963", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "CSS Log", "conta_id": "act_220492102569024", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Evolution Signs", "conta_id": "act_218764335949405", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Vieira Rossi", "conta_id": "act_2149206938558605", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Condor", "conta_id": "act_203537889759095", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Ferragens Floresta", "conta_id": "act_199516851165071", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Panorama", "conta_id": "act_1915942465406802", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Intact Estojos", "conta_id": "act_1836117320469996", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Enmed", "conta_id": "act_1775072306366660", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Oftalmoclínica Américas", "conta_id": "act_1749225102281713", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Day Hospital", "conta_id": "act_1663531577433280", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Moretti Odontologia", "conta_id": "act_1641829612969953", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Metalsider", "conta_id": "act_1625896747769654", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Kalatec", "conta_id": "act_1604948507066510", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Mactoot", "conta_id": "act_155886204959659", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Amalog", "conta_id": "act_1557368498476976", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Gloria Rabello", "conta_id": "act_1503339850472458", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Auto Credcard", "conta_id": "act_131715405272596", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Polpa & Congelados", "conta_id": "act_1259525575587947", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "JTP Solution", "conta_id": "act_1209571203593781", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Tutto Casa", "conta_id": "act_1158215392516029", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Sérgio Calçados", "conta_id": "act_1145544443248370", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Wave Solutions", "conta_id": "act_1051202479011920", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Aquifero", "conta_id": "act_1038346274756810", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Poligarbo", "conta_id": "act_914691500545820", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Vivacril", "conta_id": "act_330431722463892", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "FOR-TY STORE", "conta_id": "act_7767604866623167", "token_acesso": "EAAII0Wm9NVMBOZBdFQXpiUvkwectRt6meoWO0caJJAyxzobVhJbgvrZBsIauWCNZCuwZCXR5ZAvRPiRyE6QyE6XBt5VUYkjKT4m0LtIiGE40BITjZCtiKQ4j8ndvbURD3iZCVTbvsAf6FAiJ22FDQVptOg7FA7Auz3Wa0M5Coe4ntCPCVjBQsypwFUpjOZCZBWuvWdQZDZD"},
+    {"nome_cliente": "Exohair", "conta_id": "act_922812376352170", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+    {"nome_cliente": "Vogel", "conta_id": "act_921923696764459", "token_acesso": "EAGge1iO10QgBOwtjkzAVdKaZBoAXC8m8DcnDZA7op4oX7xZAGJ62ZAo40CJk744gcc1299ZBd4vENs176XhaIZC7ajgmAHoslH1RUT4A2QRb6SyZB28rfS0xcxCO3XZA5NJXxPAQcE6YU3QhdvzofXEGQ1WGOhX7ZCZCOvZBmlraXvZCirgczRsZBP52ZCRch9qBlBdMuaBwZDZD"},
+])
+    return contas
+
+# Definir valores de referência para métricas
+benchmarks = {
+    "cpl": {"bom": 10, "atencao": 20},  # Custo por Lead
+    "cpa": {"bom": 30, "atencao": 50},  # Custo por Aquisição
+    "ctr": {"bom": 0.015, "atencao": 0.008},  # Taxa de Cliques
+    "roas": {"bom": 3.0, "atencao": 2.0},  # Retorno sobre Investimento
+    "frequencia": {"ideal_min": 1.5, "ideal_max": 3.0},  # Frequência
+    "cpm": {"medio_min": 10, "medio_max": 25}  # Custo por Mil Impressões
+}
+
+# Tipos de conversão a serem considerados
+CONVERSION_TYPES = [
+    "offsite_conversion.custom",
+    "lead",
+    "purchase",
+    "submit_application",
+    "complete_registration",
+    "onsite_conversion.messaging_conversation_started_7d"  # Conversas iniciadas
+]
+
+# Mapeamento de nomes de métricas para exibição amigável
+METRIC_DISPLAY_NAMES = {
+    "spend": "Valor Gasto",
+    "impressions": "Impressões",
+    "clicks": "Cliques",
+    "ctr": "Taxa de Cliques",
+    "cpm": "Custo por Mil Impressões",
+    "conversions": "Conversões",
+    "conversion_value": "Valor de Conversão",
+    "cpa": "Custo por Aquisição",
+    "cpc": "Custo por Clique",
+    "roas": "Retorno sobre Investimento",
+    "frequency": "Frequência",
+    "reach": "Alcance",
+    "account_name": "Nome da Conta",
+    "campaign_name": "Nome da Campanha",
+    "status": "Status",
+    "updated_time": "Data de Atualização",
+    "total_spend": "Gasto Total",
+    "total_impressions": "Total de Impressões",
+    "total_clicks": "Total de Cliques",
+    "total_conversions": "Total de Conversões",
+    "total_conversion_value": "Valor Total de Conversão",
+    "avg_ctr": "CTR Médio",
+    "avg_cpm": "CPM Médio",
+    "avg_cpc": "CPC Médio",
+    "avg_cpa": "CPA Médio",
+    "avg_roas": "ROAS Médio",
+    "avg_frequency": "Frequência Média",
+    "total_reach": "Alcance Total",
+    "variable": "Métrica",
+    "value": "Valor"
+}
+
+# Função para formatar números no padrão brasileiro
+def format_br(value, prefix="", suffix="", decimal_places=2):
+    if isinstance(value, (int, float)):
+        if decimal_places == 0:
+            formatted = f"{int(value):,}".replace(",", ".")
+        else:
+            formatted = f"{value:,.{decimal_places}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"{prefix}{formatted}{suffix}"
+    return f"{prefix}{value}{suffix}"
+
+# Função para buscar dados da API do Meta
+@st.cache_data(ttl=3600)
+def fetch_meta_data(conta_id, token_acesso, start_date, end_date, prev_start_date, prev_end_date):
+    try:
+        # Buscar campanhas
+        campaigns_url = f"https://graph.facebook.com/v22.0/{conta_id}/campaigns"
+        campaigns_params = {
+            "fields": "id,name,status,start_time,stop_time,updated_time",
+            "access_token": token_acesso
         }
         
-        # Renomear colunas que existem nos dados
-        colunas_existentes = set(df.columns).intersection(set(mapeamento_colunas.keys()))
-        df = df.rename(columns={col: mapeamento_colunas[col] for col in colunas_existentes})
+        campaigns_response = requests.get(campaigns_url, params=campaigns_params)
         
-        # Garantir que a plataforma esteja corretamente definida
-        if 'plataforma' in df.columns:
-            # O campo datasource pode já conter o nome da plataforma
-            pass
-        else:
-            df['plataforma'] = plataforma
+        if campaigns_response.status_code != 200:
+            st.error(f"Erro ao buscar campanhas: {campaigns_response.text}")
+            return None, None
         
-        return df
-    
-    def carregar_dados(self) -> Tuple[pd.DataFrame, str]:
-        """Carregar dados de ambas as fontes e retornar dataframe processado"""
-        self.erro = None
+        campaigns_data = campaigns_response.json().get('data', [])
         
-        # Buscar dados de ambas as fontes
-        dados_google = self.buscar_dados(self.url_google_ads)
-        dados_meta = self.buscar_dados(self.url_meta_ads)
+        # Preparar dataframes de resultados
+        current_results = []
+        previous_results = []
         
-        # Se ambas as fontes falharam, retornar dataframe vazio
-        if dados_google is None and dados_meta is None:
-            return pd.DataFrame(), self.erro
-        
-        # Processar dados de cada fonte
-        df_google = pd.DataFrame()
-        df_meta = pd.DataFrame()
-        
-        if dados_google is not None:
-            df_google = self.processar_dados_windsor(dados_google, 'Google Ads')
-        
-        if dados_meta is not None:
-            df_meta = self.processar_dados_windsor(dados_meta, 'Meta Ads')
-        
-        # Mesclar dados
-        if df_google.empty and df_meta.empty:
-            return pd.DataFrame(), "Nenhum dado disponível de nenhuma fonte"
-        elif df_google.empty:
-            df = df_meta
-        elif df_meta.empty:
-            df = df_google
-        else:
-            # Garantir que as colunas correspondam antes da concatenação
-            todas_colunas = set(df_google.columns).union(set(df_meta.columns))
+        for campaign in campaigns_data:
+            campaign_id = campaign['id']
             
-            # Adicionar colunas ausentes com valores NaN
-            for col in todas_colunas:
-                if col not in df_google.columns:
-                    df_google[col] = float('nan')
-                if col not in df_meta.columns:
-                    df_meta[col] = float('nan')
+            # Buscar insights para o período atual
+            insights_url = f"https://graph.facebook.com/v22.0/{campaign_id}/insights"
+            insights_params = {
+                "fields": "spend,impressions,clicks,ctr,cpm,actions,action_values,frequency,reach",
+                "time_range[since]": start_date,
+                "time_range[until]": end_date,
+                "level": "campaign",
+                "access_token": token_acesso
+            }
             
-            # Concatenar os dataframes
-            df = pd.concat([df_google, df_meta], ignore_index=True)
-        
-        # Converter strings de data para objetos datetime
-        if 'data' in df.columns:
-            df['data'] = pd.to_datetime(df['data'])
-        
-        # Converter valores numéricos
-        colunas_numericas = ['gasto', 'cliques', 'impressoes', 'alcance', 
-                            'acoes_compra', 'valor_acoes_compra', 
-                            'conversoes', 'valor_conversao']
-        
-        for col in colunas_numericas:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # Calcular métricas derivadas com base nos dados disponíveis
-        # CTR (Taxa de cliques)
-        if 'cliques' in df.columns and 'impressoes' in df.columns:
-            df['ctr'] = (df['cliques'] / df['impressoes'] * 100).round(2)
-        
-        # CPC (Custo por clique)
-        if 'gasto' in df.columns and 'cliques' in df.columns:
-            df['cpc'] = (df['gasto'] / df['cliques']).round(2)
-        
-        # CPM (Custo por mil impressões)
-        if 'gasto' in df.columns and 'impressoes' in df.columns:
-            df['cpm'] = (df['gasto'] / df['impressoes'] * 1000).round(2)
-        
-        # CPA (Custo por aquisição) - Google
-        if 'gasto' in df.columns and 'conversoes' in df.columns:
-            df['cpa'] = (df['gasto'] / df['conversoes']).round(2)
-        
-        # CPA (Custo por aquisição) - Meta
-        if 'gasto' in df.columns and 'acoes_compra' in df.columns:
-            mask = df['plataforma'] == 'Meta Ads'
-            if mask.any():
-                df.loc[mask, 'cpa'] = (df.loc[mask, 'gasto'] / df.loc[mask, 'acoes_compra']).round(2)
-        
-        # ROAS (Retorno sobre investimento em anúncios) - Google
-        if 'valor_conversao' in df.columns and 'gasto' in df.columns:
-            mask = df['plataforma'] == 'Google Ads'
-            if mask.any():
-                df.loc[mask, 'roas'] = (df.loc[mask, 'valor_conversao'] / df.loc[mask, 'gasto']).round(2)
-        
-        # ROAS (Retorno sobre investimento em anúncios) - Meta
-        if 'valor_acoes_compra' in df.columns and 'gasto' in df.columns:
-            mask = df['plataforma'] == 'Meta Ads'
-            if mask.any():
-                df.loc[mask, 'roas'] = (df.loc[mask, 'valor_acoes_compra'] / df.loc[mask, 'gasto']).round(2)
-        
-        self.dados = df
-        self.hora_ultima_atualizacao = datetime.now()
-        
-        return df, self.erro
-
-# ===== Módulo de Visualização =====
-class Visualizador:
-    """Classe para lidar com a visualização de dados"""
-    
-    @staticmethod
-    def criar_metricas_kpi(df: pd.DataFrame, prev_df: Optional[pd.DataFrame] = None) -> Dict:
-        """Criar métricas KPI com indicadores de delta"""
-        metricas = {}
-        
-        if df.empty:
-            return metricas
-        
-        # Calcular métricas atuais
-        metricas['gasto_total'] = df['gasto'].sum()
-        
-        if 'impressoes' in df.columns:
-            metricas['impressoes_totais'] = df['impressoes'].sum()
-        else:
-            metricas['impressoes_totais'] = 0
+            insights_response = requests.get(insights_url, params=insights_params)
             
-        if 'cliques' in df.columns:
-            metricas['cliques_totais'] = df['cliques'].sum()
-        else:
-            metricas['cliques_totais'] = 0
+            if insights_response.status_code != 200:
+                st.warning(f"Erro ao buscar insights para campanha {campaign['name']}: {insights_response.text}")
+                continue
             
-        if 'impressoes' in df.columns and 'cliques' in df.columns and df['impressoes'].sum() > 0:
-            metricas['ctr_medio'] = (df['cliques'].sum() / df['impressoes'].sum() * 100)
-        else:
-            metricas['ctr_medio'] = 0
-        
-        # Calcular conversões totais (combinando Google e Meta)
-        metricas['conversoes_totais'] = 0
-        if 'conversoes' in df.columns:
-            google_mask = df['plataforma'] == 'Google Ads'
-            if google_mask.any():
-                metricas['conversoes_totais'] += df.loc[google_mask, 'conversoes'].sum()
-        
-        if 'acoes_compra' in df.columns:
-            meta_mask = df['plataforma'] == 'Meta Ads'
-            if meta_mask.any():
-                metricas['conversoes_totais'] += df.loc[meta_mask, 'acoes_compra'].sum()
-        
-        # Calcular CPA médio
-        if metricas['conversoes_totais'] > 0:
-            metricas['cpa_medio'] = metricas['gasto_total'] / metricas['conversoes_totais']
-        else:
-            metricas['cpa_medio'] = 0
-        
-        # Calcular receita total (combinando Google e Meta)
-        metricas['receita_total'] = 0
-        if 'valor_conversao' in df.columns:
-            google_mask = df['plataforma'] == 'Google Ads'
-            if google_mask.any():
-                metricas['receita_total'] += df.loc[google_mask, 'valor_conversao'].sum()
-        
-        if 'valor_acoes_compra' in df.columns:
-            meta_mask = df['plataforma'] == 'Meta Ads'
-            if meta_mask.any():
-                metricas['receita_total'] += df.loc[meta_mask, 'valor_acoes_compra'].sum()
-        
-        # Calcular ROAS médio
-        if metricas['gasto_total'] > 0:
-            metricas['roas_medio'] = metricas['receita_total'] / metricas['gasto_total']
-        else:
-            metricas['roas_medio'] = 0
-        
-        # Calcular deltas se os dados anteriores estiverem disponíveis
-        if prev_df is not None and not prev_df.empty:
-            metricas_anteriores = {}
-            metricas_anteriores['gasto_total'] = prev_df['gasto'].sum() if 'gasto' in prev_df.columns else 0
+            insights_data = insights_response.json().get('data', [])
             
-            if 'impressoes' in prev_df.columns:
-                metricas_anteriores['impressoes_totais'] = prev_df['impressoes'].sum()
-            else:
-                metricas_anteriores['impressoes_totais'] = 0
+            if not insights_data:
+                # Sem dados para esta campanha no período
+                continue
+            
+            insights = insights_data[0]
+            
+            # Extrair ações (conversões) e valores
+            conversions = {}
+            conversion_value = 0
+            total_conversions = 0
+            
+            if 'actions' in insights:
+                for action in insights['actions']:
+                    action_type = action.get('action_type')
+                    if action_type in CONVERSION_TYPES:
+                        value = int(action.get('value', 0))
+                        conversions[action_type] = value
+                        total_conversions += value
+            
+            if 'action_values' in insights:
+                for action_value in insights['action_values']:
+                    if action_value.get('action_type') in ['purchase']:
+                        conversion_value += float(action_value.get('value', 0))
+            
+            # Calcular métricas
+            spend = float(insights.get('spend', 0))
+            impressions = int(insights.get('impressions', 0))
+            clicks = int(insights.get('clicks', 0))
+            ctr = float(insights.get('ctr', 0))
+            cpm = float(insights.get('cpm', 0))
+            frequency = float(insights.get('frequency', 0))
+            reach = int(insights.get('reach', 0))
+            
+            # Calcular CPC, CPA e ROAS
+            cpc = spend / clicks if clicks > 0 else 0
+            cpa = spend / total_conversions if total_conversions > 0 else 0
+            roas = conversion_value / spend if spend > 0 else 0
+            
+            # Adicionar aos resultados atuais
+            current_results.append({
+                'campaign_id': campaign_id,
+                'campaign_name': campaign['name'],
+                'status': campaign['status'],
+                'updated_time': campaign.get('updated_time', ''),
+                'spend': spend,
+                'impressions': impressions,
+                'clicks': clicks,
+                'ctr': ctr,
+                'cpm': cpm,
+                'conversions': total_conversions,
+                'conversion_details': conversions,
+                'conversion_value': conversion_value,
+                'cpa': cpa,
+                'cpc': cpc,
+                'roas': roas,
+                'frequency': frequency,
+                'reach': reach
+            })
+            
+            # Buscar insights para o período anterior
+            prev_insights_params = {
+                "fields": "spend,impressions,clicks,ctr,cpm,actions,action_values,frequency,reach",
+                "time_range[since]": prev_start_date,
+                "time_range[until]": prev_end_date,
+                "level": "campaign",
+                "access_token": token_acesso
+            }
+            
+            prev_insights_response = requests.get(insights_url, params=prev_insights_params)
+            
+            if prev_insights_response.status_code == 200:
+                prev_insights_data = prev_insights_response.json().get('data', [])
                 
-            if 'cliques' in prev_df.columns:
-                metricas_anteriores['cliques_totais'] = prev_df['cliques'].sum()
+                if prev_insights_data:
+                    prev_insights = prev_insights_data[0]
+                    
+                    # Extrair ações (conversões) e valores para o período anterior
+                    prev_conversions = {}
+                    prev_conversion_value = 0
+                    prev_total_conversions = 0
+                    
+                    if 'actions' in prev_insights:
+                        for action in prev_insights['actions']:
+                            action_type = action.get('action_type')
+                            if action_type in CONVERSION_TYPES:
+                                value = int(action.get('value', 0))
+                                prev_conversions[action_type] = value
+                                prev_total_conversions += value
+                    
+                    if 'action_values' in prev_insights:
+                        for action_value in prev_insights['action_values']:
+                            if action_value.get('action_type') in ['purchase']:
+                                prev_conversion_value += float(action_value.get('value', 0))
+                    
+                    # Calcular métricas para o período anterior
+                    prev_spend = float(prev_insights.get('spend', 0))
+                    prev_impressions = int(prev_insights.get('impressions', 0))
+                    prev_clicks = int(prev_insights.get('clicks', 0))
+                    prev_ctr = float(prev_insights.get('ctr', 0))
+                    prev_cpm = float(prev_insights.get('cpm', 0))
+                    prev_frequency = float(prev_insights.get('frequency', 0))
+                    prev_reach = int(prev_insights.get('reach', 0))
+                    
+                    # Calcular CPC, CPA e ROAS para o período anterior
+                    prev_cpc = prev_spend / prev_clicks if prev_clicks > 0 else 0
+                    prev_cpa = prev_spend / prev_total_conversions if prev_total_conversions > 0 else 0
+                    prev_roas = prev_conversion_value / prev_spend if prev_spend > 0 else 0
+                    
+                    # Adicionar aos resultados anteriores
+                    previous_results.append({
+                        'campaign_id': campaign_id,
+                        'campaign_name': campaign['name'],
+                        'status': campaign['status'],
+                        'updated_time': campaign.get('updated_time', ''),
+                        'spend': prev_spend,
+                        'impressions': prev_impressions,
+                        'clicks': prev_clicks,
+                        'ctr': prev_ctr,
+                        'cpm': prev_cpm,
+                        'conversions': prev_total_conversions,
+                        'conversion_details': prev_conversions,
+                        'conversion_value': prev_conversion_value,
+                        'cpa': prev_cpa,
+                        'cpc': prev_cpc,
+                        'roas': prev_roas,
+                        'frequency': prev_frequency,
+                        'reach': prev_reach
+                    })
+        
+        return pd.DataFrame(current_results), pd.DataFrame(previous_results)
+    
+    except Exception as e:
+        st.error(f"Erro ao buscar dados: {str(e)}")
+        return None, None
+
+# Função para buscar dados diários
+@st.cache_data(ttl=3600)
+def fetch_daily_data(conta_id, token_acesso, campaign_id, start_date, end_date):
+    try:
+        # Buscar insights diários
+        insights_url = f"https://graph.facebook.com/v22.0/{campaign_id}/insights"
+        insights_params = {
+            "fields": "spend,impressions,clicks,actions,action_values,reach",
+            "time_range[since]": start_date,
+            "time_range[until]": end_date,
+            "time_increment": 1,
+            "level": "campaign",
+            "access_token": token_acesso
+        }
+        
+        insights_response = requests.get(insights_url, params=insights_params)
+        
+        if insights_response.status_code != 200:
+            st.warning(f"Erro ao buscar insights diários: {insights_response.text}")
+            return None
+        
+        insights_data = insights_response.json().get('data', [])
+        
+        if not insights_data:
+            return None
+        
+        # Processar dados diários
+        daily_results = []
+        
+        for day_data in insights_data:
+            date = day_data.get('date_start')
+            
+            # Extrair ações (conversões) e valores
+            conversions = 0
+            conversion_value = 0
+            
+            if 'actions' in day_data:
+                for action in day_data['actions']:
+                    if action.get('action_type') in CONVERSION_TYPES:
+                        conversions += int(action.get('value', 0))
+            
+            if 'action_values' in day_data:
+                for action_value in day_data['action_values']:
+                    if action_value.get('action_type') in ['purchase']:
+                        conversion_value += float(action_value.get('value', 0))
+            
+            # Calcular métricas
+            spend = float(day_data.get('spend', 0))
+            impressions = int(day_data.get('impressions', 0))
+            clicks = int(day_data.get('clicks', 0))
+            reach = int(day_data.get('reach', 0))
+            
+            daily_results.append({
+                'date': date,
+                'spend': spend,
+                'impressions': impressions,
+                'clicks': clicks,
+                'conversions': conversions,
+                'conversion_value': conversion_value,
+                'reach': reach
+            })
+        
+        return pd.DataFrame(daily_results)
+    
+    except Exception as e:
+        st.error(f"Erro ao buscar dados diários: {str(e)}")
+        return None
+
+# Função para buscar dados dos últimos 3 meses para verificação de conversões
+@st.cache_data(ttl=3600)
+def fetch_last_3_months_data(conta_id, token_acesso):
+    try:
+        today = datetime.now()
+        end_date = today.strftime('%Y-%m-%d')
+        start_date = (today - timedelta(days=90)).strftime('%Y-%m-%d')
+        
+        # Buscar campanhas
+        campaigns_url = f"https://graph.facebook.com/v22.0/{conta_id}/campaigns"
+        campaigns_params = {
+            "fields": "id,name",
+            "access_token": token_acesso
+        }
+        
+        campaigns_response = requests.get(campaigns_url, params=campaigns_params)
+        
+        if campaigns_response.status_code != 200:
+            return 0, False
+        
+        campaigns_data = campaigns_response.json().get('data', [])
+        
+        total_purchases = 0
+        has_purchases = False
+        
+        for campaign in campaigns_data:
+            campaign_id = campaign['id']
+            
+            # Buscar insights
+            insights_url = f"https://graph.facebook.com/v22.0/{campaign_id}/insights"
+            insights_params = {
+                "fields": "actions,action_values",
+                "time_range[since]": start_date,
+                "time_range[until]": end_date,
+                "level": "campaign",
+                "access_token": token_acesso
+            }
+            
+            insights_response = requests.get(insights_url, params=insights_params)
+            
+            if insights_response.status_code != 200:
+                continue
+            
+            insights_data = insights_response.json().get('data', [])
+            
+            if not insights_data:
+                continue
+            
+            insights = insights_data[0]
+            
+            # Verificar compras
+            if 'actions' in insights:
+                for action in insights['actions']:
+                    if action.get('action_type') == 'purchase':
+                        total_purchases += int(action.get('value', 0))
+                        has_purchases = True
+        
+        return total_purchases, has_purchases
+    
+    except Exception as e:
+        st.error(f"Erro ao buscar dados dos últimos 3 meses: {str(e)}")
+        return 0, False
+
+# Função para prever tendências futuras
+def predict_future_trends(daily_data, metric, days_to_predict=7):
+    if daily_data is None or daily_data.empty or len(daily_data) < 3:
+        return None
+    
+    # Preparar dados
+    daily_data['date'] = pd.to_datetime(daily_data['date'])
+    daily_data = daily_data.sort_values('date')
+    
+    # Criar feature numérica para dias
+    daily_data['day_num'] = (daily_data['date'] - daily_data['date'].min()).dt.days
+    
+    # Treinar modelo de regressão linear
+    X = daily_data[['day_num']]
+    y = daily_data[metric]
+    
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    # Gerar previsões
+    last_day = daily_data['day_num'].max()
+    future_days = pd.DataFrame({'day_num': range(last_day + 1, last_day + days_to_predict + 1)})
+    predictions = model.predict(future_days)
+    
+    # Criar dataframe de previsões
+    last_date = daily_data['date'].max()
+    future_dates = [last_date + timedelta(days=i+1) for i in range(days_to_predict)]
+    
+    predictions_df = pd.DataFrame({
+        'date': future_dates,
+        metric: predictions
+    })
+    
+    return predictions_df
+
+# Função para determinar a cor do status com base no valor da métrica
+def get_status_color(metric, value, delta=None, delta_conversions=None, delta_spend=None):
+    # Caso especial: se as conversões aumentaram e o gasto diminuiu, o gasto está bom
+    if metric == 'spend' and delta_conversions is not None and delta_spend is not None:
+        if delta_conversions > 0 and delta_spend < 0:
+            return "green"
+    
+    # Se delta for fornecido, usar para determinar a cor
+    if delta is not None:
+        # Métricas onde diminuição é positiva (verde se diminuir, vermelho se aumentar)
+        if metric in ['cpl', 'cpa', 'cpc', 'cpm']:
+            if delta < 0:
+                return "green"  # Diminuiu (bom)
             else:
-                metricas_anteriores['cliques_totais'] = 0
+                return "red"    # Aumentou (ruim)
+        
+        # Frequência: caso especial (verde se diminuir, amarelo se aumentar)
+        elif metric == 'frequencia':
+            if delta < 0:
+                return "green"  # Diminuiu (bom)
+            else:
+                return "yellow" # Aumentou (atenção)
+        
+        # Outras métricas (verde se aumentar mais de 10%, amarelo se variar menos de 10%, vermelho se cair mais de 10%)
+        else:
+            if delta > 0:
+                return "green"  # Aumentou (bom)
+            elif delta >= -10:
+                return "yellow" # Caiu menos de 10% (médio)
+            else:
+                return "red"    # Caiu mais de 10% (ruim)
+    
+    # Caso contrário, usar benchmarks
+    if metric == 'cpl' or metric == 'cpa':
+        if value <= benchmarks[metric]['bom']:
+            return "green"
+        elif value <= benchmarks[metric]['atencao']:
+            return "yellow"
+        else:
+            return "red"
+    elif metric == 'ctr':
+        if value >= benchmarks[metric]['bom']:
+            return "green"
+        elif value >= benchmarks[metric]['atencao']:
+            return "yellow"
+        else:
+            return "red"
+    elif metric == 'roas':
+        if value >= benchmarks[metric]['bom']:
+            return "green"
+        elif value >= benchmarks[metric]['atencao']:
+            return "yellow"
+        else:
+            return "red"
+    elif metric == 'frequencia':
+        if benchmarks[metric]['ideal_min'] <= value <= benchmarks[metric]['ideal_max']:
+            return "green"
+        elif value > benchmarks[metric]['ideal_max']:
+            return "yellow"
+        else:
+            return "red"
+    else:
+        return "gray"
+
+# Função para criar um cartão de métrica com status de cor
+def metric_card(title, value, prefix="", suffix="", status_color="gray", delta=None, tooltip=None, conversion_details=None, delta_conversions=None, delta_spend=None):
+    # Formatar valor no padrão brasileiro
+    if isinstance(value, (int, float)):
+        if title in ['impressions', 'clicks', 'conversions', 'reach']:
+            formatted_value = format_br(value, prefix, suffix, 0)
+        else:
+            formatted_value = format_br(value, prefix, suffix, 2)
+    else:
+        formatted_value = f"{prefix}{value}{suffix}"
+    
+    # Formatar delta
+    delta_html = ""
+    if delta is not None:
+        arrow = "↑" if delta >= 0 else "↓"
+        delta_color = "delta-positive" if delta >= 0 else "delta-negative"
+        
+        # Inverter cores para métricas onde diminuição é positiva
+        if title in ['cpl', 'cpa', 'cpc', 'cpm', 'frequencia']:
+            delta_color = "delta-negative" if delta >= 0 else "delta-positive"
+            
+        delta_html = f'<span class="{delta_color}">{arrow} {format_br(abs(delta), "", "%", 1)}</span>'
+    
+    # Determinar cor de fundo com base na variação
+    if delta is not None:
+        # Caso especial: se as conversões aumentaram e o gasto diminuiu, o gasto está bom
+        if title == 'spend' and delta_conversions is not None and delta_spend is not None:
+            if delta_conversions > 0 and delta_spend < 0:
+                status_color = "green"
+        # Métricas onde diminuição é positiva
+        elif title in ['cpl', 'cpa', 'cpc', 'cpm']:
+            status_color = "green" if delta < 0 else "red"
+        # Frequência: caso especial
+        elif title == 'frequencia':
+            status_color = "green" if delta < 0 else "yellow"
+        # Outras métricas
+        else:
+            if delta > 0:
+                status_color = "green"  # Aumentou (bom)
+            elif delta >= -10:
+                status_color = "yellow" # Caiu menos de 10% (médio)
+            else:
+                status_color = "red"    # Caiu mais de 10% (ruim)
+    
+    # Formatar tooltip
+    tooltip_html = ""
+    if tooltip:
+        tooltip_content = tooltip
+        
+        # Adicionar detalhes de conversão se disponíveis
+        if title == 'conversions' and conversion_details:
+            tooltip_content += "<br><br><b>Detalhes:</b><br>"
+            for conv_type, conv_value in conversion_details.items():
+                # Traduzir tipos de conversão
+                type_name = {
+                    "offsite_conversion.custom": "Conversão personalizada",
+                    "lead": "Leads gerados",
+                    "purchase": "Compras",
+                    "submit_application": "Envio de formulário",
+                    "complete_registration": "Cadastro concluído",
+                    "onsite_conversion.messaging_conversation_started_7d": "Conversas iniciadas"
+                }.get(conv_type, conv_type)
                 
-            if ('impressoes' in prev_df.columns and 'cliques' in prev_df.columns and 
-                prev_df['impressoes'].sum() > 0):
-                metricas_anteriores['ctr_medio'] = (prev_df['cliques'].sum() / prev_df['impressoes'].sum() * 100)
-            else:
-                metricas_anteriores['ctr_medio'] = 0
-            
-            # Calcular conversões totais anteriores
-            metricas_anteriores['conversoes_totais'] = 0
-            if 'conversoes' in prev_df.columns:
-                google_mask = prev_df['plataforma'] == 'Google Ads'
-                if google_mask.any():
-                    metricas_anteriores['conversoes_totais'] += prev_df.loc[google_mask, 'conversoes'].sum()
-            
-            if 'acoes_compra' in prev_df.columns:
-                meta_mask = prev_df['plataforma'] == 'Meta Ads'
-                if meta_mask.any():
-                    metricas_anteriores['conversoes_totais'] += prev_df.loc[meta_mask, 'acoes_compra'].sum()
-            
-            # Calcular CPA médio anterior
-            if metricas_anteriores['conversoes_totais'] > 0:
-                metricas_anteriores['cpa_medio'] = metricas_anteriores['gasto_total'] / metricas_anteriores['conversoes_totais']
-            else:
-                metricas_anteriores['cpa_medio'] = 0
-            
-            # Calcular receita total anterior
-            metricas_anteriores['receita_total'] = 0
-            if 'valor_conversao' in prev_df.columns:
-                google_mask = prev_df['plataforma'] == 'Google Ads'
-                if google_mask.any():
-                    metricas_anteriores['receita_total'] += prev_df.loc[google_mask, 'valor_conversao'].sum()
-            
-            if 'valor_acoes_compra' in prev_df.columns:
-                meta_mask = prev_df['plataforma'] == 'Meta Ads'
-                if meta_mask.any():
-                    metricas_anteriores['receita_total'] += prev_df.loc[meta_mask, 'valor_acoes_compra'].sum()
-            
-            # Calcular ROAS médio anterior
-            if metricas_anteriores['gasto_total'] > 0:
-                metricas_anteriores['roas_medio'] = metricas_anteriores['receita_total'] / metricas_anteriores['gasto_total']
-            else:
-                metricas_anteriores['roas_medio'] = 0
-            
-            # Calcular mudanças percentuais
-            for chave in list(metricas):
-                if metricas_anteriores.get(chave, 0) != 0:
-                    delta = ((metricas[chave] - metricas_anteriores[chave]) / metricas_anteriores[chave] * 100)
-                    metricas[f"{chave}_delta"] = delta
-                else:
-                    metricas[f"{chave}_delta"] = 0
+                tooltip_content += f"{type_name}: {conv_value}<br>"
         
-        return metricas
+        tooltip_html = f"""
+        <div class="tooltip">ℹ️
+            <span class="tooltiptext">{tooltip_content}</span>
+        </div>
+        """
     
-    @staticmethod
-    def criar_grafico_gasto_vs_conversoes(df: pd.DataFrame) -> go.Figure:
-        """Criar gráfico de linha mostrando gasto vs conversões ao longo do tempo"""
-        if df.empty or 'data' not in df.columns:
-            # Retornar figura vazia se não houver dados
-            return go.Figure()
-        
-        # Agrupar por data
-        dados_diarios = df.groupby('data').agg({
-            'gasto': 'sum'
-        }).reset_index()
-        
-        # Calcular conversões por dia (combinando Google e Meta)
-        conversoes_por_dia = {}
-        
-        # Processar dados do Google Ads
-        if 'conversoes' in df.columns:
-            google_df = df[df['plataforma'] == 'Google Ads']
-            if not google_df.empty:
-                google_conversoes = google_df.groupby('data')['conversoes'].sum().reset_index()
-                for _, row in google_conversoes.iterrows():
-                    data = row['data']
-                    if data not in conversoes_por_dia:
-                        conversoes_por_dia[data] = 0
-                    conversoes_por_dia[data] += row['conversoes']
-        
-        # Processar dados do Meta Ads
-        if 'acoes_compra' in df.columns:
-            meta_df = df[df['plataforma'] == 'Meta Ads']
-            if not meta_df.empty:
-                meta_conversoes = meta_df.groupby('data')['acoes_compra'].sum().reset_index()
-                for _, row in meta_conversoes.iterrows():
-                    data = row['data']
-                    if data not in conversoes_por_dia:
-                        conversoes_por_dia[data] = 0
-                    conversoes_por_dia[data] += row['acoes_compra']
-        
-        # Adicionar conversões ao dataframe diário
-        dados_diarios['conversoes'] = dados_diarios['data'].map(conversoes_por_dia).fillna(0)
-        
-        # Criar figura com eixo y secundário
-        fig = go.Figure()
-        
-        # Adicionar linha de gasto
-        fig.add_trace(
-            go.Scatter(
-                x=dados_diarios['data'],
-                y=dados_diarios['gasto'],
-                name='Gasto',
-                line=dict(color='#1f77b4', width=2),
-                hovertemplate='Data: %{x}<br>Gasto: R$ %{y:.2f}<extra></extra>'
-            )
-        )
-        
-        # Adicionar linha de conversões
-        fig.add_trace(
-            go.Scatter(
-                x=dados_diarios['data'],
-                y=dados_diarios['conversoes'],
-                name='Conversões',
-                line=dict(color='#ff7f0e', width=2, dash='dot'),
-                hovertemplate='Data: %{x}<br>Conversões: %{y}<extra></extra>'
-            )
-        )
-        
-        # Atualizar layout
-        fig.update_layout(
-            title='Gasto e Conversões ao Longo do Tempo',
-            xaxis_title='Data',
-            yaxis_title='Gasto (R$)',
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
-            hovermode="x unified",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        return fig
-    
-    @staticmethod
-    def criar_grafico_desempenho_campanha(df: pd.DataFrame) -> go.Figure:
-        """Criar gráfico de barras comparando o desempenho por campanha"""
-        if df.empty or 'nome_campanha' not in df.columns:
-            # Retornar figura vazia se não houver dados
-            return go.Figure()
-        
-        # Agrupar por campanha e somar métricas
-        metricas_para_agregar = {'gasto': 'sum'}
-        if 'cliques' in df.columns:
-            metricas_para_agregar['cliques'] = 'sum'
-        
-        # Adicionar conversões específicas por plataforma
-        if 'conversoes' in df.columns or 'acoes_compra' in df.columns:
-            # Criar uma coluna temporária para armazenar todas as conversões
-            df['total_conversoes'] = 0
-            
-            # Adicionar conversões do Google
-            if 'conversoes' in df.columns:
-                google_mask = df['plataforma'] == 'Google Ads'
-                if google_mask.any():
-                    df.loc[google_mask, 'total_conversoes'] += df.loc[google_mask, 'conversoes']
-            
-            # Adicionar conversões do Meta
-            if 'acoes_compra' in df.columns:
-                meta_mask = df['plataforma'] == 'Meta Ads'
-                if meta_mask.any():
-                    df.loc[meta_mask, 'total_conversoes'] += df.loc[meta_mask, 'acoes_compra']
-            
-            metricas_para_agregar['total_conversoes'] = 'sum'
-            
-        dados_campanha = df.groupby('nome_campanha').agg(metricas_para_agregar).reset_index()
-        
-        # Ordenar por gasto para melhor visualização
-        dados_campanha = dados_campanha.sort_values('gasto', ascending=False)
-        
-        # Limitar a 10 campanhas para melhor visualização
-        if len(dados_campanha) > 10:
-            dados_campanha = dados_campanha.head(10)
-        
-        # Criar figura
-        fig = go.Figure()
-        
-        # Adicionar barras de gasto
-        fig.add_trace(
-            go.Bar(
-                x=dados_campanha['nome_campanha'],
-                y=dados_campanha['gasto'],
-                name='Gasto',
-                marker_color='#1f77b4',
-                hovertemplate='Campanha: %{x}<br>Gasto: R$ %{y:.2f}<extra></extra>'
-            )
-        )
-        
-        # Adicionar barras de cliques se disponível
-        if 'cliques' in dados_campanha.columns:
-            fig.add_trace(
-                go.Bar(
-                    x=dados_campanha['nome_campanha'],
-                    y=dados_campanha['cliques'],
-                    name='Cliques',
-                    marker_color='#ff7f0e',
-                    hovertemplate='Campanha: %{x}<br>Cliques: %{y}<extra></extra>'
-                )
-            )
-        
-        # Adicionar barras de conversões se disponível
-        if 'total_conversoes' in dados_campanha.columns:
-            fig.add_trace(
-                go.Bar(
-                    x=dados_campanha['nome_campanha'],
-                    y=dados_campanha['total_conversoes'],
-                    name='Conversões',
-                    marker_color='#2ca02c',
-                    hovertemplate='Campanha: %{x}<br>Conversões: %{y}<extra></extra>'
-                )
-            )
-        
-        # Atualizar layout
-        fig.update_layout(
-            title='Comparação de Desempenho por Campanha (Top 10)',
-            xaxis_title='Campanha',
-            yaxis_title='Valor',
-            barmode='group',
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        return fig
-    
-    @staticmethod
-    def criar_grafico_distribuicao_plataforma(df: pd.DataFrame) -> go.Figure:
-        """Criar gráfico de pizza mostrando a distribuição de orçamento entre plataformas"""
-        if df.empty or 'plataforma' not in df.columns:
-            # Retornar figura vazia se não houver dados
-            return go.Figure()
-        
-        # Agrupar por plataforma e somar gasto
-        dados_plataforma = df.groupby('plataforma').agg({
-            'gasto': 'sum'
-        }).reset_index()
-        
-        # Criar figura
-        fig = go.Figure(
-            go.Pie(
-                labels=dados_plataforma['plataforma'],
-                values=dados_plataforma['gasto'],
-                hole=0.4,
-                marker=dict(colors=['#1f77b4', '#ff7f0e']),
-                textinfo='label+percent',
-                hoverinfo='label+value',
-                hovertemplate='Plataforma: %{label}<br>Gasto: R$ %{value:.2f}<extra></extra>'
-            )
-        )
-        
-        # Atualizar layout
-        fig.update_layout(
-            title='Distribuição de Orçamento por Plataforma',
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=-0.1,
-                xanchor="center",
-                x=0.5
-            ),
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        return fig
-    
-    @staticmethod
-    def criar_grafico_cliques_diarios(df: pd.DataFrame) -> go.Figure:
-        """Criar gráfico de linha mostrando cliques ao longo do tempo por plataforma"""
-        if df.empty or 'data' not in df.columns or 'cliques' not in df.columns:
-            # Retornar figura vazia se não houver dados
-            return go.Figure()
-        
-        # Agrupar por data e plataforma, somar cliques
-        cliques_diarios = df.groupby(['data', 'plataforma']).agg({
-            'cliques': 'sum'
-        }).reset_index()
-        
-        # Criar figura
-        fig = px.line(
-            cliques_diarios, 
-            x='data', 
-            y='cliques', 
-            color='plataforma',
-            title='Cliques Diários por Plataforma',
-            labels={'data': 'Data', 'cliques': 'Cliques', 'plataforma': 'Plataforma'},
-            line_shape='linear',
-            render_mode='svg'
-        )
-        
-        # Atualizar layout
-        fig.update_layout(
-            xaxis_title='Data',
-            yaxis_title='Cliques',
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
-            hovermode="x unified",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        return fig
-    
-    @staticmethod
-    def criar_grafico_tendencia_ctr(df: pd.DataFrame) -> go.Figure:
-        """Criar gráfico de linha mostrando a tendência de CTR ao longo do tempo por plataforma"""
-        if df.empty or 'data' not in df.columns or 'cliques' not in df.columns or 'impressoes' not in df.columns:
-            # Retornar figura vazia se não houver dados
-            return go.Figure()
-        
-        # Calcular CTR diário por plataforma
-        df_temp = df.copy()
-        df_temp['ctr'] = (df_temp['cliques'] / df_temp['impressoes'] * 100).round(2)
-        
-        ctr_diario = df_temp.groupby(['data', 'plataforma']).agg({
-            'ctr': 'mean'
-        }).reset_index()
-        
-        # Criar figura
-        fig = px.line(
-            ctr_diario, 
-            x='data', 
-            y='ctr', 
-            color='plataforma',
-            title='Tendência de CTR por Plataforma',
-            labels={'data': 'Data', 'ctr': 'CTR (%)', 'plataforma': 'Plataforma'},
-            line_shape='linear',
-            render_mode='svg'
-        )
-        
-        # Atualizar layout
-        fig.update_layout(
-            xaxis_title='Data',
-            yaxis_title='CTR (%)',
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
-            hovermode="x unified",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        return fig
+    return f"""
+    <div class="metric-card metric-{status_color}">
+        <h3>{title.upper()} {tooltip_html}</h3>
+        <h2>{formatted_value}</h2>
+        {delta_html}
+    </div>
+    """
 
-# ===== Funções para páginas específicas =====
-def mostrar_pagina_geral(dados_filtrados):
-    """Mostrar a página geral com dados de ambas as plataformas"""
-    # Criar visualizador
-    visualizador = Visualizador()
-    
-    # Seção de métricas KPI
-    st.subheader("Indicadores Chave de Desempenho")
-    
-    # Calcular métricas KPI com deltas
-    metricas = visualizador.criar_metricas_kpi(dados_filtrados, st.session_state.dados_anteriores)
-    
-    # Exibir métricas em colunas
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Gasto Total",
-            formatar_valor_br(metricas.get('gasto_total', 0)),
-            f"{metricas.get('gasto_total_delta', 0):+.1f}%" if 'gasto_total_delta' in metricas else None
-        )
-        
-        st.metric(
-            "Total de Cliques",
-            formatar_numero_br(metricas.get('cliques_totais', 0)),
-            f"{metricas.get('cliques_totais_delta', 0):+.1f}%" if 'cliques_totais_delta' in metricas else None
-        )
-    
-    with col2:
-        st.metric(
-            "Total de Impressões",
-            formatar_numero_br(metricas.get('impressoes_totais', 0)),
-            f"{metricas.get('impressoes_totais_delta', 0):+.1f}%" if 'impressoes_totais_delta' in metricas else None
-        )
-        
-        st.metric(
-            "CTR Médio",
-            f"{metricas.get('ctr_medio', 0):.2f}%".replace('.', ','),
-            f"{metricas.get('ctr_medio_delta', 0):+.1f}%".replace('.', ',') if 'ctr_medio_delta' in metricas else None
-        )
-    
-    with col3:
-        st.metric(
-            "Total de Conversões",
-            formatar_numero_br(metricas.get('conversoes_totais', 0)),
-            f"{metricas.get('conversoes_totais_delta', 0):+.1f}%" if 'conversoes_totais_delta' in metricas else None
-        )
-        
-        st.metric(
-            "CPA Médio",
-            formatar_valor_br(metricas.get('cpa_medio', 0)),
-            f"{metricas.get('cpa_medio_delta', 0):+.1f}%" if 'cpa_medio_delta' in metricas else None,
-            delta_color="inverse"  # CPA menor é melhor
-        )
-    
-    with col4:
-        st.metric(
-            "Receita Total",
-            formatar_valor_br(metricas.get('receita_total', 0)),
-            f"{metricas.get('receita_total_delta', 0):+.1f}%" if 'receita_total_delta' in metricas else None
-        )
-        
-        st.metric(
-            "ROAS Médio",
-            f"{metricas.get('roas_medio', 0):.2f}".replace('.', ','),
-            f"{metricas.get('roas_medio_delta', 0):+.1f}%" if 'roas_medio_delta' in metricas else None
-        )
-    
-    # Seção de gráficos
-    st.subheader("Análise de Desempenho")
-    
-    # Criar abas para diferentes visualizações de gráficos
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Série Temporal", "Comparação de Campanhas", "Distribuição por Plataforma", "Cliques Diários", "Tendência de CTR"])
-    
-    with tab1:
-        # Gasto vs Conversões ao longo do tempo
-        grafico_gasto_conv = visualizador.criar_grafico_gasto_vs_conversoes(dados_filtrados)
-        st.plotly_chart(grafico_gasto_conv, use_container_width=True)
-    
-    with tab2:
-        # Comparação de desempenho de campanha
-        grafico_campanha = visualizador.criar_grafico_desempenho_campanha(dados_filtrados)
-        st.plotly_chart(grafico_campanha, use_container_width=True)
-    
-    with tab3:
-        # Distribuição por plataforma
-        grafico_plataforma = visualizador.criar_grafico_distribuicao_plataforma(dados_filtrados)
-        st.plotly_chart(grafico_plataforma, use_container_width=True)
-    
-    with tab4:
-        # Cliques diários por plataforma
-        grafico_cliques = visualizador.criar_grafico_cliques_diarios(dados_filtrados)
-        st.plotly_chart(grafico_cliques, use_container_width=True)
-    
-    with tab5:
-        # Tendência de CTR
-        grafico_ctr = visualizador.criar_grafico_tendencia_ctr(dados_filtrados)
-        st.plotly_chart(grafico_ctr, use_container_width=True)
-    
-    # Tabela de dados
-    st.subheader("Tabela de Dados")
-    
-    if not dados_filtrados.empty:
-        # Agrupar por campanha e plataforma
-        metricas_para_agregar = {
-            'gasto': 'sum',
-            'cliques': 'sum'
-        }
-        
-        if 'impressoes' in dados_filtrados.columns:
-            metricas_para_agregar['impressoes'] = 'sum'
-        
-        # Adicionar conversões específicas por plataforma
-        if 'conversoes' in dados_filtrados.columns or 'acoes_compra' in dados_filtrados.columns:
-            # Criar uma coluna temporária para armazenar todas as conversões
-            dados_filtrados['total_conversoes'] = 0
-            
-            # Adicionar conversões do Google
-            if 'conversoes' in dados_filtrados.columns:
-                google_mask = dados_filtrados['plataforma'] == 'Google Ads'
-                if google_mask.any():
-                    dados_filtrados.loc[google_mask, 'total_conversoes'] += dados_filtrados.loc[google_mask, 'conversoes']
-            
-            # Adicionar conversões do Meta
-            if 'acoes_compra' in dados_filtrados.columns:
-                meta_mask = dados_filtrados['plataforma'] == 'Meta Ads'
-                if meta_mask.any():
-                    dados_filtrados.loc[meta_mask, 'total_conversoes'] += dados_filtrados.loc[meta_mask, 'acoes_compra']
-            
-            metricas_para_agregar['total_conversoes'] = 'sum'
-        
-        # Adicionar receita específica por plataforma
-        if 'valor_conversao' in dados_filtrados.columns or 'valor_acoes_compra' in dados_filtrados.columns:
-            # Criar uma coluna temporária para armazenar toda a receita
-            dados_filtrados['receita_total'] = 0
-            
-            # Adicionar receita do Google
-            if 'valor_conversao' in dados_filtrados.columns:
-                google_mask = dados_filtrados['plataforma'] == 'Google Ads'
-                if google_mask.any():
-                    dados_filtrados.loc[google_mask, 'receita_total'] += dados_filtrados.loc[google_mask, 'valor_conversao']
-            
-            # Adicionar receita do Meta
-            if 'valor_acoes_compra' in dados_filtrados.columns:
-                meta_mask = dados_filtrados['plataforma'] == 'Meta Ads'
-                if meta_mask.any():
-                    dados_filtrados.loc[meta_mask, 'receita_total'] += dados_filtrados.loc[meta_mask, 'valor_acoes_compra']
-            
-            metricas_para_agregar['receita_total'] = 'sum'
-        
-        dados_tabela = dados_filtrados.groupby(['nome_campanha', 'plataforma']).agg(metricas_para_agregar).reset_index()
-        
-        # Calcular métricas derivadas
-        if 'impressoes' in dados_tabela.columns and 'cliques' in dados_tabela.columns:
-            dados_tabela['ctr'] = (dados_tabela['cliques'] / dados_tabela['impressoes'] * 100).round(2)
-        
-        if 'cliques' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpc'] = (dados_tabela['gasto'] / dados_tabela['cliques']).round(2)
-        
-        if 'impressoes' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpm'] = (dados_tabela['gasto'] / dados_tabela['impressoes'] * 1000).round(2)
-        
-        if 'total_conversoes' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpa'] = (dados_tabela['gasto'] / dados_tabela['total_conversoes']).round(2)
-        
-        if 'receita_total' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['roas'] = (dados_tabela['receita_total'] / dados_tabela['gasto']).round(2)
-        
-        # Formatar para exibição
-        dados_exibicao = dados_tabela.copy()
-        
-        # Formatar valores no padrão brasileiro
-        if 'gasto' in dados_exibicao.columns:
-            dados_exibicao['gasto'] = dados_exibicao['gasto'].apply(lambda x: formatar_valor_br(x))
-        
-        if 'cliques' in dados_exibicao.columns:
-            dados_exibicao['cliques'] = dados_exibicao['cliques'].apply(lambda x: formatar_numero_br(x))
-        
-        if 'impressoes' in dados_exibicao.columns:
-            dados_exibicao['impressoes'] = dados_exibicao['impressoes'].apply(lambda x: formatar_numero_br(x))
-        
-        if 'total_conversoes' in dados_exibicao.columns:
-            dados_exibicao['total_conversoes'] = dados_exibicao['total_conversoes'].apply(lambda x: formatar_numero_br(x))
-        
-        if 'receita_total' in dados_exibicao.columns:
-            dados_exibicao['receita_total'] = dados_exibicao['receita_total'].apply(lambda x: formatar_valor_br(x))
-        
-        if 'ctr' in dados_exibicao.columns:
-            dados_exibicao['ctr'] = dados_exibicao['ctr'].apply(lambda x: f"{x:.2f}%".replace('.', ','))
-        
-        if 'cpc' in dados_exibicao.columns:
-            dados_exibicao['cpc'] = dados_exibicao['cpc'].apply(lambda x: formatar_valor_br(x))
-        
-        if 'cpm' in dados_exibicao.columns:
-            dados_exibicao['cpm'] = dados_exibicao['cpm'].apply(lambda x: formatar_valor_br(x))
-        
-        if 'cpa' in dados_exibicao.columns:
-            dados_exibicao['cpa'] = dados_exibicao['cpa'].apply(lambda x: formatar_valor_br(x))
-        
-        if 'roas' in dados_exibicao.columns:
-            dados_exibicao['roas'] = dados_exibicao['roas'].apply(lambda x: f"{x:.2f}".replace('.', ','))
-        
-        # Renomear colunas para exibição
-        mapeamento_colunas = {
-            'nome_campanha': 'Campanha',
-            'plataforma': 'Plataforma',
-            'gasto': 'Gasto',
-            'cliques': 'Cliques',
-            'impressoes': 'Impressões',
-            'total_conversoes': 'Conversões',
-            'receita_total': 'Receita',
-            'ctr': 'CTR',
-            'cpc': 'CPC',
-            'cpm': 'CPM',
-            'cpa': 'CPA',
-            'roas': 'ROAS'
-        }
-        
-        dados_exibicao = dados_exibicao.rename(columns=mapeamento_colunas)
-        
-        st.dataframe(dados_exibicao, use_container_width=True)
-        
-        # Adicionar botão de download
-        csv = dados_tabela.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Baixar Dados como CSV",
-            data=csv,
-            file_name="dados_desempenho_anuncios.csv",
-            mime="text/csv",
-        )
-    else:
-        st.info("Nenhum dado disponível para os filtros selecionados.")
-
-def mostrar_pagina_google_ads(dados_filtrados):
-    """Mostrar a página específica para Google Ads"""
-    # Filtrar apenas dados do Google Ads
-    dados_google = dados_filtrados[dados_filtrados['plataforma'] == 'Google Ads'].copy()
-    
-    if dados_google.empty:
-        st.warning("Nenhum dado do Google Ads disponível para os filtros selecionados.")
-        return
-    
-    # Criar visualizador
-    visualizador = Visualizador()
-    
-    # Seção de métricas KPI
-    st.subheader("Indicadores Chave de Desempenho")
-    
-    # Calcular métricas KPI
-    metricas = {}
-    metricas['gasto_total'] = dados_google['gasto'].sum()
-    metricas['impressoes_totais'] = dados_google['impressoes'].sum() if 'impressoes' in dados_google.columns else 0
-    metricas['cliques_totais'] = dados_google['cliques'].sum() if 'cliques' in dados_google.columns else 0
-    
-    if 'impressoes' in dados_google.columns and 'cliques' in dados_google.columns and dados_google['impressoes'].sum() > 0:
-        metricas['ctr_medio'] = (dados_google['cliques'].sum() / dados_google['impressoes'].sum() * 100)
-    else:
-        metricas['ctr_medio'] = 0
-    
-    if 'conversoes' in dados_google.columns:
-        metricas['conversoes_totais'] = dados_google['conversoes'].sum()
-    else:
-        metricas['conversoes_totais'] = 0
-    
-    if 'conversoes' in dados_google.columns and dados_google['conversoes'].sum() > 0:
-        metricas['cpa_medio'] = dados_google['gasto'].sum() / dados_google['conversoes'].sum()
-    else:
-        metricas['cpa_medio'] = 0
-    
-    if 'valor_conversao' in dados_google.columns:
-        metricas['receita_total'] = dados_google['valor_conversao'].sum()
-    else:
-        metricas['receita_total'] = 0
-    
-    if metricas['gasto_total'] > 0 and metricas['receita_total'] > 0:
-        metricas['roas_medio'] = metricas['receita_total'] / metricas['gasto_total']
-    else:
-        metricas['roas_medio'] = 0
-    
-    # Exibir métricas em colunas
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Gasto Total",
-            formatar_valor_br(metricas.get('gasto_total', 0))
-        )
-        
-        st.metric(
-            "Total de Cliques",
-            formatar_numero_br(metricas.get('cliques_totais', 0))
-        )
-    
-    with col2:
-        st.metric(
-            "Total de Impressões",
-            formatar_numero_br(metricas.get('impressoes_totais', 0))
-        )
-        
-        st.metric(
-            "CTR Médio",
-            f"{metricas.get('ctr_medio', 0):.2f}%".replace('.', ',')
-        )
-    
-    with col3:
-        st.metric(
-            "Total de Conversões",
-            formatar_numero_br(metricas.get('conversoes_totais', 0))
-        )
-        
-        st.metric(
-            "CPA Médio",
-            formatar_valor_br(metricas.get('cpa_medio', 0))
-        )
-    
-    with col4:
-        st.metric(
-            "Receita Total",
-            formatar_valor_br(metricas.get('receita_total', 0))
-        )
-        
-        st.metric(
-            "ROAS Médio",
-            f"{metricas.get('roas_medio', 0):.2f}".replace('.', ',')
-        )
-    
-    # Seção de gráficos
-    st.subheader("Análise de Desempenho")
-    
-    # Criar gráficos específicos para Google Ads
-    # Gráfico de tendência de conversões ao longo do tempo
-    if 'data' in dados_google.columns and 'conversoes' in dados_google.columns:
-        conversoes_diarias = dados_google.groupby('data').agg({
-            'conversoes': 'sum',
-            'gasto': 'sum'
-        }).reset_index()
-        
-        fig_conversoes = go.Figure()
-        
-        fig_conversoes.add_trace(
-            go.Scatter(
-                x=conversoes_diarias['data'],
-                y=conversoes_diarias['conversoes'],
-                name='Conversões',
-                line=dict(color='#2ca02c', width=2),
-                hovertemplate='Data: %{x}<br>Conversões: %{y}<extra></extra>'
-            )
-        )
-        
-        fig_conversoes.add_trace(
-            go.Scatter(
-                x=conversoes_diarias['data'],
-                y=conversoes_diarias['gasto'],
-                name='Gasto',
-                line=dict(color='#1f77b4', width=2, dash='dot'),
-                yaxis='y2',
-                hovertemplate='Data: %{x}<br>Gasto: R$ %{y:.2f}<extra></extra>'
-            )
-        )
-        
-        fig_conversoes.update_layout(
-            title='Conversões e Gasto ao Longo do Tempo - Google Ads',
-            xaxis_title='Data',
-            yaxis_title='Conversões',
-            yaxis2=dict(
-                title='Gasto (R$)',
-                overlaying='y',
-                side='right'
-            ),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
-            hovermode="x unified",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        st.plotly_chart(fig_conversoes, use_container_width=True)
-    
-    # Gráfico de desempenho por campanha
-    if 'nome_campanha' in dados_google.columns:
-        # Agrupar por campanha
-        dados_campanha = dados_google.groupby('nome_campanha').agg({
-            'gasto': 'sum',
-            'cliques': 'sum',
-            'conversoes': 'sum' if 'conversoes' in dados_google.columns else None,
-            'valor_conversao': 'sum' if 'valor_conversao' in dados_google.columns else None
-        }).reset_index()
-        
-        # Remover colunas None
-        dados_campanha = dados_campanha.dropna(axis=1)
-        
-        # Calcular ROAS se possível
-        if 'valor_conversao' in dados_campanha.columns and 'gasto' in dados_campanha.columns:
-            dados_campanha['roas'] = (dados_campanha['valor_conversao'] / dados_campanha['gasto']).round(2)
-        
-        # Ordenar por gasto
-        dados_campanha = dados_campanha.sort_values('gasto', ascending=False)
-        
-        # Limitar a 10 campanhas
-        if len(dados_campanha) > 10:
-            dados_campanha = dados_campanha.head(10)
-        
-        # Criar gráfico de barras para ROAS por campanha
-        if 'roas' in dados_campanha.columns:
-            fig_roas = px.bar(
-                dados_campanha,
-                x='nome_campanha',
-                y='roas',
-                title='ROAS por Campanha (Top 10)',
-                labels={'nome_campanha': 'Campanha', 'roas': 'ROAS'},
-                color='roas',
-                color_continuous_scale='Viridis'
-            )
-            
-            fig_roas.update_layout(
-                xaxis_title='Campanha',
-                yaxis_title='ROAS',
-                coloraxis_showscale=False,
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=400
-            )
-            
-            st.plotly_chart(fig_roas, use_container_width=True)
-    
-    # Tabela de dados do Google Ads
-    st.subheader("Tabela de Dados")
-    
-    if not dados_google.empty:
-        # Agrupar por campanha
-        metricas_para_agregar = {
-            'gasto': 'sum',
-            'cliques': 'sum',
-            'impressoes': 'sum' if 'impressoes' in dados_google.columns else None,
-            'conversoes': 'sum' if 'conversoes' in dados_google.columns else None,
-            'valor_conversao': 'sum' if 'valor_conversao' in dados_google.columns else None
-        }
-        
-        # Remover None
-        metricas_para_agregar = {k: v for k, v in metricas_para_agregar.items() if v is not None}
-        
-        dados_tabela = dados_google.groupby('nome_campanha').agg(metricas_para_agregar).reset_index()
-        
-        # Calcular métricas derivadas
-        if 'impressoes' in dados_tabela.columns and 'cliques' in dados_tabela.columns:
-            dados_tabela['ctr'] = (dados_tabela['cliques'] / dados_tabela['impressoes'] * 100).round(2)
-        
-        if 'cliques' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpc'] = (dados_tabela['gasto'] / dados_tabela['cliques']).round(2)
-        
-        if 'impressoes' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpm'] = (dados_tabela['gasto'] / dados_tabela['impressoes'] * 1000).round(2)
-        
-        if 'conversoes' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpa'] = (dados_tabela['gasto'] / dados_tabela['conversoes']).round(2)
-        
-        if 'valor_conversao' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['roas'] = (dados_tabela['valor_conversao'] / dados_tabela['gasto']).round(2)
-        
-        # Formatar para exibição
-        dados_exibicao = dados_tabela.copy()
-        
-        # Formatar valores no padrão brasileiro
-        colunas_para_formatar = {
-            'gasto': lambda x: formatar_valor_br(x),
-            'cliques': lambda x: formatar_numero_br(x),
-            'impressoes': lambda x: formatar_numero_br(x),
-            'conversoes': lambda x: formatar_numero_br(x),
-            'valor_conversao': lambda x: formatar_valor_br(x),
-            'ctr': lambda x: f"{x:.2f}%".replace('.', ','),
-            'cpc': lambda x: formatar_valor_br(x),
-            'cpm': lambda x: formatar_valor_br(x),
-            'cpa': lambda x: formatar_valor_br(x),
-            'roas': lambda x: f"{x:.2f}x".replace('.', ',')
-        }
-        
-        for col, func in colunas_para_formatar.items():
-            if col in dados_exibicao.columns:
-                dados_exibicao[col] = dados_exibicao[col].apply(func)
-        
-        # Renomear colunas para exibição
-        mapeamento_colunas = {
-            'nome_campanha': 'Campanha',
-            'gasto': 'Gasto',
-            'cliques': 'Cliques',
-            'impressoes': 'Impressões',
-            'conversoes': 'Conversões',
-            'valor_conversao': 'Receita',
-            'ctr': 'CTR',
-            'cpc': 'CPC',
-            'cpm': 'CPM',
-            'cpa': 'CPA',
-            'roas': 'ROAS'
-        }
-        
-        dados_exibicao = dados_exibicao.rename(columns=mapeamento_colunas)
-        
-        st.dataframe(dados_exibicao, use_container_width=True)
-        
-        # Adicionar botão de download
-        csv = dados_tabela.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Baixar Dados do Google Ads como CSV",
-            data=csv,
-            file_name="dados_google_ads.csv",
-            mime="text/csv",
-        )
-    else:
-        st.info("Nenhum dado do Google Ads disponível para os filtros selecionados.")
-
-def mostrar_pagina_meta_ads(dados_filtrados):
-    """Mostrar a página específica para Meta Ads"""
-    # Filtrar apenas dados do Meta Ads
-    dados_meta = dados_filtrados[dados_filtrados['plataforma'] == 'Meta Ads'].copy()
-    
-    if dados_meta.empty:
-        st.warning("Nenhum dado do Meta Ads disponível para os filtros selecionados.")
-        return
-    
-    # Criar visualizador
-    visualizador = Visualizador()
-    
-    # Seção de métricas KPI
-    st.subheader("Indicadores Chave de Desempenho")
-    
-    # Calcular métricas KPI
-    metricas = {}
-    metricas['gasto_total'] = dados_meta['gasto'].sum()
-    metricas['impressoes_totais'] = dados_meta['impressoes'].sum() if 'impressoes' in dados_meta.columns else 0
-    metricas['cliques_totais'] = dados_meta['cliques'].sum() if 'cliques' in dados_meta.columns else 0
-    
-    if 'impressoes' in dados_meta.columns and 'cliques' in dados_meta.columns and dados_meta['impressoes'].sum() > 0:
-        metricas['ctr_medio'] = (dados_meta['cliques'].sum() / dados_meta['impressoes'].sum() * 100)
-    else:
-        metricas['ctr_medio'] = 0
-    
-    if 'acoes_compra' in dados_meta.columns:
-        metricas['conversoes_totais'] = dados_meta['acoes_compra'].sum()
-    else:
-        metricas['conversoes_totais'] = 0
-    
-    if 'acoes_compra' in dados_meta.columns and dados_meta['acoes_compra'].sum() > 0:
-        metricas['cpa_medio'] = dados_meta['gasto'].sum() / dados_meta['acoes_compra'].sum()
-    else:
-        metricas['cpa_medio'] = 0
-    
-    if 'valor_acoes_compra' in dados_meta.columns:
-        metricas['receita_total'] = dados_meta['valor_acoes_compra'].sum()
-    else:
-        metricas['receita_total'] = 0
-    
-    if metricas['gasto_total'] > 0 and metricas['receita_total'] > 0:
-        metricas['roas_medio'] = metricas['receita_total'] / metricas['gasto_total']
-    else:
-        metricas['roas_medio'] = 0
-    
-    # Exibir métricas em colunas
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Gasto Total",
-            formatar_valor_br(metricas.get('gasto_total', 0))
-        )
-        
-        st.metric(
-            "Total de Cliques",
-            formatar_numero_br(metricas.get('cliques_totais', 0))
-        )
-    
-    with col2:
-        st.metric(
-            "Total de Impressões",
-            formatar_numero_br(metricas.get('impressoes_totais', 0))
-        )
-        
-        st.metric(
-            "CTR Médio",
-            f"{metricas.get('ctr_medio', 0):.2f}%".replace('.', ',')
-        )
-    
-    with col3:
-        st.metric(
-            "Total de Conversões",
-            formatar_numero_br(metricas.get('conversoes_totais', 0))
-        )
-        
-        st.metric(
-            "CPA Médio",
-            formatar_valor_br(metricas.get('cpa_medio', 0))
-        )
-    
-    with col4:
-        st.metric(
-            "Receita Total",
-            formatar_valor_br(metricas.get('receita_total', 0))
-        )
-        
-        st.metric(
-            "ROAS Médio",
-            f"{metricas.get('roas_medio', 0):.2f}".replace('.', ',')
-        )
-    
-    # Seção de gráficos
-    st.subheader("Análise de Desempenho")
-    
-    # Criar gráficos específicos para Meta Ads
-    # Gráfico de tendência de alcance e impressões ao longo do tempo
-    if 'data' in dados_meta.columns and 'alcance' in dados_meta.columns and 'impressoes' in dados_meta.columns:
-        alcance_diario = dados_meta.groupby('data').agg({
-            'alcance': 'sum',
-            'impressoes': 'sum'
-        }).reset_index()
-        
-        fig_alcance = go.Figure()
-        
-        fig_alcance.add_trace(
-            go.Scatter(
-                x=alcance_diario['data'],
-                y=alcance_diario['alcance'],
-                name='Alcance',
-                line=dict(color='#ff7f0e', width=2),
-                hovertemplate='Data: %{x}<br>Alcance: %{y}<extra></extra>'
-            )
-        )
-        
-        fig_alcance.add_trace(
-            go.Scatter(
-                x=alcance_diario['data'],
-                y=alcance_diario['impressoes'],
-                name='Impressões',
-                line=dict(color='#1f77b4', width=2, dash='dot'),
-                hovertemplate='Data: %{x}<br>Impressões: %{y}<extra></extra>'
-            )
-        )
-        
-        fig_alcance.update_layout(
-            title='Alcance e Impressões ao Longo do Tempo - Meta Ads',
-            xaxis_title='Data',
-            yaxis_title='Valor',
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1
-            ),
-            hovermode="x unified",
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        st.plotly_chart(fig_alcance, use_container_width=True)
-    
-    # Gráfico de desempenho por conjunto de anúncios
-    if 'nome_conjunto_anuncios' in dados_meta.columns:
-        # Agrupar por conjunto de anúncios
-        dados_conjunto = dados_meta.groupby('nome_conjunto_anuncios').agg({
-            'gasto': 'sum',
-            'cliques': 'sum',
-            'acoes_compra': 'sum' if 'acoes_compra' in dados_meta.columns else None,
-            'valor_acoes_compra': 'sum' if 'valor_acoes_compra' in dados_meta.columns else None
-        }).reset_index()
-        
-        # Remover colunas None
-        dados_conjunto = dados_conjunto.dropna(axis=1)
-        
-        # Calcular ROAS se possível
-        if 'valor_acoes_compra' in dados_conjunto.columns and 'gasto' in dados_conjunto.columns:
-            dados_conjunto['roas'] = (dados_conjunto['valor_acoes_compra'] / dados_conjunto['gasto']).round(2)
-        
-        # Ordenar por gasto
-        dados_conjunto = dados_conjunto.sort_values('gasto', ascending=False)
-        
-        # Limitar a 10 conjuntos
-        if len(dados_conjunto) > 10:
-            dados_conjunto = dados_conjunto.head(10)
-        
-        # Criar gráfico de barras para gasto por conjunto de anúncios
-        fig_conjunto = px.bar(
-            dados_conjunto,
-            x='nome_conjunto_anuncios',
-            y='gasto',
-            title='Gasto por Conjunto de Anúncios (Top 10)',
-            labels={'nome_conjunto_anuncios': 'Conjunto de Anúncios', 'gasto': 'Gasto (R$)'},
-            color='gasto',
-            color_continuous_scale='Blues'
-        )
-        
-        fig_conjunto.update_layout(
-            xaxis_title='Conjunto de Anúncios',
-            yaxis_title='Gasto (R$)',
-            coloraxis_showscale=False,
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
-        )
-        
-        st.plotly_chart(fig_conjunto, use_container_width=True)
-    
-    # Tabela de dados do Meta Ads
-    st.subheader("Tabela de Dados")
-    
-    if not dados_meta.empty:
-        # Agrupar por campanha e conjunto de anúncios
-        metricas_para_agregar = {
-            'gasto': 'sum',
-            'cliques': 'sum',
-            'impressoes': 'sum' if 'impressoes' in dados_meta.columns else None,
-            'alcance': 'sum' if 'alcance' in dados_meta.columns else None,
-            'acoes_compra': 'sum' if 'acoes_compra' in dados_meta.columns else None,
-            'valor_acoes_compra': 'sum' if 'valor_acoes_compra' in dados_meta.columns else None
-        }
-        
-        # Remover None
-        metricas_para_agregar = {k: v for k, v in metricas_para_agregar.items() if v is not None}
-        
-        dados_tabela = dados_meta.groupby(['nome_campanha', 'nome_conjunto_anuncios']).agg(metricas_para_agregar).reset_index()
-        
-        # Calcular métricas derivadas
-        if 'impressoes' in dados_tabela.columns and 'cliques' in dados_tabela.columns:
-            dados_tabela['ctr'] = (dados_tabela['cliques'] / dados_tabela['impressoes'] * 100).round(2)
-        
-        if 'cliques' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpc'] = (dados_tabela['gasto'] / dados_tabela['cliques']).round(2)
-        
-        if 'impressoes' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpm'] = (dados_tabela['gasto'] / dados_tabela['impressoes'] * 1000).round(2)
-        
-        if 'acoes_compra' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['cpa'] = (dados_tabela['gasto'] / dados_tabela['acoes_compra']).round(2)
-        
-        if 'valor_acoes_compra' in dados_tabela.columns and 'gasto' in dados_tabela.columns:
-            dados_tabela['roas'] = (dados_tabela['valor_acoes_compra'] / dados_tabela['gasto']).round(2)
-        
-        # Formatar para exibição
-        dados_exibicao = dados_tabela.copy()
-        
-        # Formatar valores no padrão brasileiro
-        colunas_para_formatar = {
-            'gasto': lambda x: formatar_valor_br(x),
-            'cliques': lambda x: formatar_numero_br(x),
-            'impressoes': lambda x: formatar_numero_br(x),
-            'alcance': lambda x: formatar_numero_br(x),
-            'acoes_compra': lambda x: formatar_numero_br(x),
-            'valor_acoes_compra': lambda x: formatar_valor_br(x),
-            'ctr': lambda x: f"{x:.2f}%".replace('.', ','),
-            'cpc': lambda x: formatar_valor_br(x),
-            'cpm': lambda x: formatar_valor_br(x),
-            'cpa': lambda x: formatar_valor_br(x),
-            'roas': lambda x: f"{x:.2f}x".replace('.', ',')
-        }
-        
-        for col, func in colunas_para_formatar.items():
-            if col in dados_exibicao.columns:
-                dados_exibicao[col] = dados_exibicao[col].apply(func)
-        
-        # Renomear colunas para exibição
-        mapeamento_colunas = {
-            'nome_campanha': 'Campanha',
-            'nome_conjunto_anuncios': 'Conjunto de Anúncios',
-            'gasto': 'Gasto',
-            'cliques': 'Cliques',
-            'impressoes': 'Impressões',
-            'alcance': 'Alcance',
-            'acoes_compra': 'Conversões',
-            'valor_acoes_compra': 'Receita',
-            'ctr': 'CTR',
-            'cpc': 'CPC',
-            'cpm': 'CPM',
-            'cpa': 'CPA',
-            'roas': 'ROAS'
-        }
-        
-        dados_exibicao = dados_exibicao.rename(columns=mapeamento_colunas)
-        
-        st.dataframe(dados_exibicao, use_container_width=True)
-        
-        # Adicionar botão de download
-        csv = dados_tabela.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Baixar Dados do Meta Ads como CSV",
-            data=csv,
-            file_name="dados_meta_ads.csv",
-            mime="text/csv",
-        )
-    else:
-        st.info("Nenhum dado do Meta Ads disponível para os filtros selecionados.")
-
-# ===== Aplicação Principal =====
+# Função principal do dashboard
 def main():
-    """Função principal da aplicação"""
-    # Inicializar estado da sessão para persistência de dados
-    if 'carregador_dados' not in st.session_state:
-        st.session_state.carregador_dados = CarregadorDados(
-            url_google_ads="https://connectors.windsor.ai/google_ads?api_key=c168624686715dd94fc7b034c450d42c39ea&date_from=2025-03-01&date_to=2028-03-01&fields=ad_name,campaign,clicks,conversion_value,conversions,date,impressions,spend&select_accounts=304-359-3631&_renderer=json",
-            url_meta_ads="https://connectors.windsor.ai/facebook?api_key=c168624686715dd94fc7b034c450d42c39ea&date_from=2025-03-01&date_to=2028-03-01&fields=action_values_omni_purchase,actions_purchase,ad_name,adset_name,campaign,clicks,date,impressions,reach,spend&select_accounts=922812376352170&_renderer=json"
+    # Cabeçalho
+    st.title("📊 Meta Ads Dashboard Farol")
+    st.markdown("Monitoramento de desempenho de campanhas do Meta Ads com sistema de farol")
+    
+    # Carregar contas
+    contas = load_accounts()
+    
+    # Barra lateral para filtros
+    st.sidebar.title("Filtros")
+    
+    # Seleção de contas
+    selected_accounts = st.sidebar.multiselect(
+        "Selecione as contas",
+        options=contas['nome_cliente'].tolist(),
+        default=contas['nome_cliente'].tolist()[:5]  # Padrão para as primeiras 5 contas
+    )
+    
+    # Seleção de intervalo de datas
+    today = datetime.now()
+    max_date = today
+    min_date = today - timedelta(days=365)  # Limite de 1 ano atrás
+    
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        start_date = st.date_input(
+            "Data inicial",
+            value=today - timedelta(days=7),
+            min_value=min_date,
+            max_value=max_date
+        )
+    with col2:
+        end_date = st.date_input(
+            "Data final",
+            value=today,
+            min_value=min_date,
+            max_value=max_date
         )
     
-    if 'dados_anteriores' not in st.session_state:
-        st.session_state.dados_anteriores = pd.DataFrame()
+    # Validar intervalo de datas
+    if start_date > end_date:
+        st.sidebar.error("A data inicial deve ser anterior à data final.")
+        return
     
-    if 'dados_atuais' not in st.session_state:
-        st.session_state.dados_atuais = pd.DataFrame()
+    # Calcular período anterior para comparação
+    date_diff = (end_date - start_date).days + 1
+    prev_end_date = start_date - timedelta(days=1)
+    prev_start_date = prev_end_date - timedelta(days=date_diff - 1)
     
-    if 'ultima_atualizacao' not in st.session_state:
-        st.session_state.ultima_atualizacao = None
+    # Formatar datas para API
+    start_date_str = start_date.strftime('%Y-%m-%d')
+    end_date_str = end_date.strftime('%Y-%m-%d')
+    prev_start_date_str = prev_start_date.strftime('%Y-%m-%d')
+    prev_end_date_str = prev_end_date.strftime('%Y-%m-%d')
     
-    if 'atualizacao_automatica' not in st.session_state:
-        st.session_state.atualizacao_automatica = True
+    # Filtro de status da campanha
+    status_options = ["ACTIVE", "PAUSED", "COMPLETED", "ALL"]
+    selected_status = st.sidebar.selectbox(
+        "Status da campanha",
+        options=status_options,
+        index=3  # Padrão para ALL
+    )
     
-    if 'pagina_atual' not in st.session_state:
-        st.session_state.pagina_atual = "Geral"
+    # Botão para atualizar dados
+    if st.sidebar.button("Atualizar dados"):
+        st.cache_data.clear()
+        st.experimental_rerun()
     
-    # Cabeçalho
-    st.title("Painel de Desempenho de Publicidade Digital")
+    # Hora da última atualização
+    last_update = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    st.sidebar.markdown(f"**Última atualização:** {last_update}")
     
-    # Navegação entre páginas
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("📊 Visão Geral", use_container_width=True):
-            st.session_state.pagina_atual = "Geral"
-    with col2:
-        if st.button("🔍 Google Ads", use_container_width=True):
-            st.session_state.pagina_atual = "Google Ads"
-    with col3:
-        if st.button("📱 Meta Ads", use_container_width=True):
-            st.session_state.pagina_atual = "Meta Ads"
+    # Botão para exportar dados
+    st.sidebar.markdown("### Exportar dados")
+    export_format = st.sidebar.selectbox(
+        "Formato",
+        options=["CSV", "Excel"],
+        index=0
+    )
     
-    # Barra lateral para filtros e controles
-    with st.sidebar:
-        # Configuração de fonte de dados
-        st.subheader("Fontes de Dados")
-        st.caption("Dados do Meta e Google Ads")
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-        # Entradas de intervalo de datas para URLs da API
-        
-        # Atualizar URLs da API com novos intervalos de datas
-        url_google_ads = f"https://connectors.windsor.ai/google_ads?api_key=c168624686715dd94fc7b034c450d42c39ea&date_from=2025-03-01&date_to=2028-03-01&fields=ad_name,campaign,clicks,conversion_value,conversions,date,impressions,spend&select_accounts=304-359-3631&_renderer=json"
-        url_meta_ads = f"https://connectors.windsor.ai/facebook?api_key=c168624686715dd94fc7b034c450d42c39ea&date_from=2025-03-01&date_to=2028-03-01&fields=action_values_omni_purchase,actions_purchase,ad_name,adset_name,campaign,clicks,date,impressions,reach,spend&select_accounts=922812376352170&_renderer=json"
-        
-        # Atualizar fontes de dados se alteradas
-        if (url_google_ads != st.session_state.carregador_dados.url_google_ads or 
-            url_meta_ads != st.session_state.carregador_dados.url_meta_ads):
-            st.session_state.carregador_dados = CarregadorDados(
-                url_google_ads=url_google_ads,
-                url_meta_ads=url_meta_ads
+    # Filtrar contas com base na seleção
+    filtered_contas = contas[contas['nome_cliente'].isin(selected_accounts)]
+    
+    # Inicializar contêineres para seções do dashboard
+    kpi_container = st.container()
+    charts_container = st.container()
+    table_container = st.container()
+    
+    # Buscar e processar dados para as contas selecionadas
+    all_current_data = []
+    all_previous_data = []
+    account_summaries = []
+    
+    with st.spinner("Carregando dados..."):
+        for _, conta in filtered_contas.iterrows():
+            current_data, previous_data = fetch_meta_data(
+                conta['conta_id'], 
+                conta['token_acesso'], 
+                start_date_str, 
+                end_date_str,
+                prev_start_date_str,
+                prev_end_date_str
             )
-        
-        # Controles de atualização
-        st.subheader("Atualização de Dados")
-        
-        # Usar colunas para os botões
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔄 Atualizar"):
-                with st.spinner("Atualizando dados..."):
-                    # Armazenar dados anteriores para cálculos de delta
-                    st.session_state.dados_anteriores = st.session_state.dados_atuais.copy() if not st.session_state.dados_atuais.empty else None
-                    
-                    # Carregar novos dados
-                    df, erro = st.session_state.carregador_dados.carregar_dados()
-                    
-                    if erro:
-                        st.error(f"Erro ao carregar dados: {erro}")
-                    else:
-                        st.session_state.dados_atuais = df
-                        st.session_state.ultima_atualizacao = datetime.now()
-                        st.success("Dados atualizados com sucesso!")
-        
-        with col2:
-            st.session_state.atualizacao_automatica = st.checkbox(
-                "🔄 Auto", 
-                value=st.session_state.atualizacao_automatica,
-                help="Atualização automática a cada 5 minutos"
-            )
-        
-        if st.session_state.ultima_atualizacao:
-            st.info(f"Última atualização: {st.session_state.ultima_atualizacao.strftime('%d/%m/%Y %H:%M:%S')}")
-
-        st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-
-        # Adicionar filtros apenas se tivermos dados
-        if not st.session_state.dados_atuais.empty:
-            st.subheader("Filtros")
             
-            # Filtro de intervalo de datas
-            if 'data' in st.session_state.dados_atuais.columns:
-                data_min = st.session_state.dados_atuais['data'].min().date()
-                data_max = st.session_state.dados_atuais['data'].max().date()
+            if current_data is not None and not current_data.empty:
+                current_data['account_name'] = conta['nome_cliente']
+                current_data['account_id'] = conta['conta_id']
+                current_data['token_acesso'] = conta['token_acesso']
+                all_current_data.append(current_data)
                 
-                intervalo_data = st.date_input(
-                    "Filtrar Intervalo de Data",
-                    value=(data_min, data_max),
-                    min_value=data_min,
-                    max_value=data_max,
-                    key="filtro_intervalo_data"
-                )
+                # Calcular resumo da conta
+                account_summary = {
+                    'account_name': conta['nome_cliente'],
+                    'account_id': conta['conta_id'],
+                    'token_acesso': conta['token_acesso'],
+                    'campaigns': len(current_data),
+                    'total_spend': current_data['spend'].sum(),
+                    'total_impressions': current_data['impressions'].sum(),
+                    'total_clicks': current_data['clicks'].sum(),
+                    'total_conversions': current_data['conversions'].sum(),
+                    'total_conversion_value': current_data['conversion_value'].sum(),
+                    'conversion_details': {},
+                    'avg_ctr': current_data['clicks'].sum() / current_data['impressions'].sum() if current_data['impressions'].sum() > 0 else 0,
+                    'avg_cpm': current_data['spend'].sum() / (current_data['impressions'].sum() / 1000) if current_data['impressions'].sum() > 0 else 0,
+                    'avg_cpc': current_data['spend'].sum() / current_data['clicks'].sum() if current_data['clicks'].sum() > 0 else 0,
+                    'avg_cpa': current_data['spend'].sum() / current_data['conversions'].sum() if current_data['conversions'].sum() > 0 else 0,
+                    'avg_roas': current_data['conversion_value'].sum() / current_data['spend'].sum() if current_data['spend'].sum() > 0 else 0,
+                    'avg_frequency': current_data['frequency'].mean(),
+                    'total_reach': current_data['reach'].sum()
+                }
                 
-                # Lidar com seleção de data única
-                if isinstance(intervalo_data, tuple) and len(intervalo_data) == 2:
-                    data_inicio, data_fim = intervalo_data
-                else:
-                    data_inicio = data_fim = intervalo_data
-            else:
-                data_inicio = data_fim = None
-            
-            # Filtro de plataforma
-            if 'plataforma' in st.session_state.dados_atuais.columns:
-                plataformas = st.session_state.dados_atuais['plataforma'].unique().tolist()
-                plataformas_selecionadas = plataformas
-            else:
-                plataformas_selecionadas = None
-            
-            # Filtro de campanha
-            if 'nome_campanha' in st.session_state.dados_atuais.columns:
-                campanhas = st.session_state.dados_atuais['nome_campanha'].unique().tolist()
-                campanhas_selecionadas = st.multiselect(
-                    "Campanha",
-                    options=campanhas,
-                    default=campanhas
-                )
-            else:
-                campanhas_selecionadas = None
-            
-            # Aplicar filtros aos dados
-            dados_filtrados = st.session_state.dados_atuais.copy()
-            
-            if data_inicio and data_fim and 'data' in dados_filtrados.columns:
-                dados_filtrados = dados_filtrados[
-                    (dados_filtrados['data'].dt.date >= data_inicio) & 
-                    (dados_filtrados['data'].dt.date <= data_fim)
-                ]
-            
-            if plataformas_selecionadas and 'plataforma' in dados_filtrados.columns:
-                dados_filtrados = dados_filtrados[dados_filtrados['plataforma'].isin(plataformas_selecionadas)]
-            
-            if campanhas_selecionadas and 'nome_campanha' in dados_filtrados.columns:
-                dados_filtrados = dados_filtrados[dados_filtrados['nome_campanha'].isin(campanhas_selecionadas)]
-        else:
-            dados_filtrados = pd.DataFrame()
-    
-    # Área de conteúdo principal
-    if st.session_state.dados_atuais.empty:
-        st.warning("Nenhum dado disponível. Verifique seus endpoints de API e clique em 'Atualizar'.")
-        
-        # Adicionar um botão para carregar dados de exemplo para demonstração
-        if st.button("Carregar Dados de Exemplo"):
-            with st.spinner("Carregando dados de exemplo..."):
-                # Criar dados de exemplo
-                datas = pd.date_range(start='2025-04-01', end='2025-09-30')
-                campanhas = ['Reconhecimento de Marca', 'Retargeting', 'Conversão', 'Prospecção']
-                plataformas = ['Google Ads', 'Meta Ads']
-                
-                dados = []
-                for data in datas:
-                    for campanha in campanhas:
-                        for plataforma in plataformas:
-                            # Gerar dados aleatórios
-                            cliques = int(np.random.normal(100, 30))
-                            gasto = round(np.random.normal(50, 15), 2)
-                            impressoes = cliques * 50
-                            conversoes = int(cliques * 0.05)
-                            receita = gasto * 3
-                            
-                            if plataforma == 'Meta Ads':
-                                dados.append({
-                                    'data': data,
-                                    'nome_campanha': campanha,
-                                    'nome_conjunto_anuncios': f'Conjunto {campanha}',
-                                    'nome_anuncio': f'Anúncio {campanha} {data.day}',
-                                    'plataforma': plataforma,
-                                    'cliques': cliques,
-                                    'gasto': gasto,
-                                    'impressoes': impressoes,
-                                    'alcance': int(impressoes * 0.7),
-                                    'acoes_compra': conversoes,
-                                    'valor_acoes_compra': receita
-                                })
+                # Agregar detalhes de conversão
+                all_conversion_details = {}
+                for _, row in current_data.iterrows():
+                    if isinstance(row['conversion_details'], dict):
+                        for conv_type, conv_value in row['conversion_details'].items():
+                            if conv_type in all_conversion_details:
+                                all_conversion_details[conv_type] += conv_value
                             else:
-                                dados.append({
-                                    'data': data,
-                                    'nome_campanha': campanha,
-                                    'nome_anuncio': f'Anúncio {campanha} {data.day}',
-                                    'plataforma': plataforma,
-                                    'cliques': cliques,
-                                    'gasto': gasto,
-                                    'impressoes': impressoes,
-                                    'conversoes': conversoes,
-                                    'valor_conversao': receita
-                                })
+                                all_conversion_details[conv_type] = conv_value
                 
-                df_exemplo = pd.DataFrame(dados)
-                st.session_state.dados_atuais = df_exemplo
-                st.session_state.ultima_atualizacao = datetime.now()
-                dados_filtrados = df_exemplo
-                st.success("Dados de exemplo carregados com sucesso!")
-                st.rerun()
-    else:
-        # Mostrar a página selecionada
-        if st.session_state.pagina_atual == "Geral":
-            mostrar_pagina_geral(dados_filtrados)
-        elif st.session_state.pagina_atual == "Google Ads":
-            mostrar_pagina_google_ads(dados_filtrados)
-        elif st.session_state.pagina_atual == "Meta Ads":
-            mostrar_pagina_meta_ads(dados_filtrados)
+                account_summary['conversion_details'] = all_conversion_details
+                account_summaries.append(account_summary)
+            
+            if previous_data is not None and not previous_data.empty:
+                previous_data['account_name'] = conta['nome_cliente']
+                all_previous_data.append(previous_data)
     
-    # Lógica de atualização automática
-    if st.session_state.atualizacao_automatica:
-        # Verificar se é hora de atualizar (a cada 5 minutos)
-        if (st.session_state.ultima_atualizacao is None or 
-            (datetime.now() - st.session_state.ultima_atualizacao).total_seconds() >= 300):
-            # Usar um placeholder para mostrar o status de atualização
-            placeholder_atualizacao = st.empty()
-            placeholder_atualizacao.info("Atualizando dados automaticamente...")
+    # Combinar todos os dados
+    if all_current_data and all_previous_data:
+        combined_current_data = pd.concat(all_current_data, ignore_index=True)
+        combined_previous_data = pd.concat(all_previous_data, ignore_index=True)
+        account_summary_df = pd.DataFrame(account_summaries)
+        
+        # Filtrar por status da campanha se não for ALL
+        if selected_status != "ALL":
+            combined_current_data = combined_current_data[combined_current_data['status'] == selected_status]
+            combined_previous_data = combined_previous_data[combined_previous_data['status'] == selected_status]
+        
+        # Verificar se é uma única conta
+        is_single_account = len(filtered_contas) == 1
+        
+        # Se for uma única conta, verificar compras nos últimos 3 meses
+        if is_single_account:
+            account_id = filtered_contas.iloc[0]['conta_id']
+            token_acesso = filtered_contas.iloc[0]['token_acesso']
             
-            # Armazenar dados anteriores para cálculos de delta
-            st.session_state.dados_anteriores = st.session_state.dados_atuais.copy() if not st.session_state.dados_atuais.empty else None
+            total_purchases, has_purchases = fetch_last_3_months_data(account_id, token_acesso)
             
-            # Carregar novos dados
-            df, erro = st.session_state.carregador_dados.carregar_dados()
+            if has_purchases:
+                if total_purchases < 10:
+                    st.markdown(f"""
+                    <div class="warning-red">
+                        <strong>⚠️ Alerta de Red Flag:</strong> Esta conta teve apenas {total_purchases} compras nos últimos 3 meses, o que está abaixo do mínimo recomendado de 10 compras.
+                    </div>
+                    """, unsafe_allow_html=True)
+                elif total_purchases < 20:
+                    st.markdown(f"""
+                    <div class="warning-yellow">
+                        <strong>⚠️ Alerta de Yellow Flag:</strong> Esta conta teve apenas {total_purchases} compras nos últimos 3 meses, o que está abaixo do ideal de 20 compras.
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        # Seção de Resumo KPI
+        with kpi_container:
+            st.markdown("## 📈 Resumo KPI")
             
-            if erro:
-                placeholder_atualizacao.error(f"Erro ao carregar dados: {erro}")
+            # Calcular métricas gerais
+            total_spend = combined_current_data['spend'].sum()
+            total_impressions = combined_current_data['impressions'].sum()
+            total_clicks = combined_current_data['clicks'].sum()
+            total_conversions = combined_current_data['conversions'].sum()
+            total_conversion_value = combined_current_data['conversion_value'].sum()
+            total_reach = combined_current_data['reach'].sum()
+            
+            avg_ctr = total_clicks / total_impressions if total_impressions > 0 else 0
+            avg_cpm = total_spend / (total_impressions / 1000) if total_impressions > 0 else 0
+            avg_cpc = total_spend / total_clicks if total_clicks > 0 else 0
+            avg_cpa = total_spend / total_conversions if total_conversions > 0 else 0
+            avg_roas = total_conversion_value / total_spend if total_spend > 0 else 0
+            avg_frequency = combined_current_data['frequency'].mean()
+            
+            # Calcular métricas do período anterior
+            prev_total_spend = combined_previous_data['spend'].sum()
+            prev_total_impressions = combined_previous_data['impressions'].sum()
+            prev_total_clicks = combined_previous_data['clicks'].sum()
+            prev_total_conversions = combined_previous_data['conversions'].sum()
+            prev_total_conversion_value = combined_previous_data['conversion_value'].sum()
+            prev_total_reach = combined_previous_data['reach'].sum()
+            
+            prev_avg_ctr = prev_total_clicks / prev_total_impressions if prev_total_impressions > 0 else 0
+            prev_avg_cpm = prev_total_spend / (prev_total_impressions / 1000) if prev_total_impressions > 0 else 0
+            prev_avg_cpc = prev_total_spend / prev_total_clicks if prev_total_clicks > 0 else 0
+            prev_avg_cpa = prev_total_spend / prev_total_conversions if prev_total_conversions > 0 else 0
+            prev_avg_roas = prev_total_conversion_value / prev_total_spend if prev_total_spend > 0 else 0
+            prev_avg_frequency = combined_previous_data['frequency'].mean()
+            
+            # Calcular variações percentuais
+            delta_spend = ((total_spend - prev_total_spend) / prev_total_spend * 100) if prev_total_spend > 0 else 0
+            delta_impressions = ((total_impressions - prev_total_impressions) / prev_total_impressions * 100) if prev_total_impressions > 0 else 0
+            delta_clicks = ((total_clicks - prev_total_clicks) / prev_total_clicks * 100) if prev_total_clicks > 0 else 0
+            delta_conversions = ((total_conversions - prev_total_conversions) / prev_total_conversions * 100) if prev_total_conversions > 0 else 0
+            delta_conversion_value = ((total_conversion_value - prev_total_conversion_value) / prev_total_conversion_value * 100) if prev_total_conversion_value > 0 else 0
+            delta_reach = ((total_reach - prev_total_reach) / prev_total_reach * 100) if prev_total_reach > 0 else 0
+            
+            delta_ctr = ((avg_ctr - prev_avg_ctr) / prev_avg_ctr * 100) if prev_avg_ctr > 0 else 0
+            delta_cpm = ((avg_cpm - prev_avg_cpm) / prev_avg_cpm * 100) if prev_avg_cpm > 0 else 0
+            delta_cpc = ((avg_cpc - prev_avg_cpc) / prev_avg_cpc * 100) if prev_avg_cpc > 0 else 0
+            delta_cpa = ((avg_cpa - prev_avg_cpa) / prev_avg_cpa * 100) if prev_avg_cpa > 0 else 0
+            delta_roas = ((avg_roas - prev_avg_roas) / prev_avg_roas * 100) if prev_avg_roas > 0 else 0
+            delta_frequency = ((avg_frequency - prev_avg_frequency) / prev_avg_frequency * 100) if prev_avg_frequency > 0 else 0
+            
+            # Agregar todos os detalhes de conversão
+            all_conversion_details = {}
+            for _, row in combined_current_data.iterrows():
+                if isinstance(row['conversion_details'], dict):
+                    for conv_type, conv_value in row['conversion_details'].items():
+                        if conv_type in all_conversion_details:
+                            all_conversion_details[conv_type] += conv_value
+                        else:
+                            all_conversion_details[conv_type] = conv_value
+            
+            # Criar cartões KPI em colunas
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.markdown(metric_card(
+                    "Gasto Total", 
+                    total_spend, 
+                    prefix="R$ ", 
+                    delta=delta_spend,
+                    delta_conversions=delta_conversions,
+                    delta_spend=delta_spend,
+                    tooltip="Total investido nas campanhas selecionadas"
+                ), unsafe_allow_html=True)
+                
+                st.markdown(metric_card(
+                    "CTR", 
+                    avg_ctr * 100, 
+                    suffix="%", 
+                    status_color=get_status_color("ctr", avg_ctr, delta_ctr),
+                    delta=delta_ctr,
+                    tooltip="Taxa de cliques (Clicks / Impressões)"
+                ), unsafe_allow_html=True)
+                
+                st.markdown(metric_card(
+                "Impressões", 
+                f"{total_impressions:,}".replace(",", "."),  # aqui formatamos com pontos nos milhares
+                delta=delta_impressions,
+                status_color=get_status_color("impressions", 0, delta_impressions),
+                tooltip="Número total de vezes que os anúncios foram exibidos"
+                ), unsafe_allow_html=True)
+
+            
+            with col2:
+                st.markdown(metric_card(
+                    "CPM", 
+                    avg_cpm, 
+                    prefix="R$ ", 
+                    delta=delta_cpm,
+                    status_color=get_status_color("cpm", 0, delta_cpm),
+                    tooltip="Custo por mil impressões"
+                ), unsafe_allow_html=True)
+
+                st.markdown(metric_card(
+                "Conversões", 
+                f"{total_conversions:,}".replace(",", "."),  # ← formatação aplicada aqui
+                delta=delta_conversions,
+                status_color=get_status_color("conversions", 0, delta_conversions),
+                tooltip="Total de leads, compras ou registros completos",
+                conversion_details=all_conversion_details
+                ), unsafe_allow_html=True)
+
+                st.markdown(metric_card(
+                    "CPA", 
+                    avg_cpa, 
+                    prefix="R$ ", 
+                    status_color=get_status_color("cpa", avg_cpa, delta_cpa),
+                    delta=delta_cpa,
+                    tooltip="Custo por aquisição (Gasto / Conversões)"
+                ), unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown(metric_card(
+                    "ROAS", 
+                    avg_roas, 
+                    status_color=get_status_color("roas", avg_roas, delta_roas),
+                    delta=delta_roas,
+                    tooltip="Retorno sobre investimento em anúncios (Valor / Gasto)"
+                ), unsafe_allow_html=True)
+                
+                st.markdown(metric_card(
+                    "Frequência", 
+                    avg_frequency, 
+                    status_color=get_status_color("frequencia", avg_frequency, delta_frequency),
+                    delta=delta_frequency,
+                    tooltip="Média de vezes que uma pessoa viu seus anúncios"
+                ), unsafe_allow_html=True)
+
+                st.markdown(metric_card(
+                    "Receita", 
+                    total_conversion_value, 
+                    prefix="R$ ", 
+                    delta=delta_conversion_value,
+                    status_color=get_status_color("conversion_value", 0, delta_conversion_value),
+                    tooltip="Valor total gerado pelas conversões"
+                ), unsafe_allow_html=True)
+            
+            with col4:
+                st.markdown(metric_card(
+                    "CPC", 
+                    avg_cpc, 
+                    prefix="R$ ", 
+                    delta=delta_cpc,
+                    status_color=get_status_color("cpc", 0, delta_cpc),
+                    tooltip="Custo por clique (Gasto / Cliques)"
+                ), unsafe_allow_html=True)
+            
+                st.markdown(metric_card(
+                "Cliques", 
+                f"{total_clicks:,}".replace(",", "."),  # ← formato 1.234.567 aplicado
+                delta=delta_clicks,
+                status_color=get_status_color("clicks", 0, delta_clicks),
+                tooltip="Número total de cliques nos anúncios"
+                ), unsafe_allow_html=True)
+                
+                st.markdown(metric_card(
+                "Alcance", 
+                f"{total_reach:,}".replace(",", "."),  # ← formato 1.234.567 aplicado
+                delta=delta_reach,
+                status_color=get_status_color("reach", 0, delta_reach),
+                tooltip="Número de pessoas únicas que viram seus anúncios"
+                ), unsafe_allow_html=True)
+             
+        
+        # Seção de Gráficos
+        with charts_container:
+            st.markdown("## 📊 Visualizações")
+            
+            # Verificar se apenas uma conta foi selecionada
+            if is_single_account:
+                # Visualizações específicas para uma única conta
+                account_data = account_summary_df.iloc[0]
+                account_name = account_data['account_name']
+                account_id = account_data['account_id']
+                token_acesso = account_data['token_acesso']
+                
+                st.markdown(f"### Análise da conta: {account_name}")
+                
+                # Seletor de métricas para gráficos
+                metric_options = {
+                    "Gasto": "spend",
+                    "Impressões": "impressions",
+                    "Cliques": "clicks",
+                    "Conversões": "conversions",
+                    "Valor de Conversão": "conversion_value",
+                    "Alcance": "reach"
+                }
+                
+                # Criar abas para diferentes visualizações
+                chart_tabs = st.tabs([
+                    "Tendência Diária", 
+                    "Desempenho por Campanha", 
+                    "Previsão de Tendências",
+                    "Análise de Frequência",
+                    "Comparação de Evolução"
+                ])
+                
+                # Tab 1: Tendência Diária
+                with chart_tabs[0]:
+                    # Mover o seletor de métricas para cima do gráfico
+                    selected_metrics = st.multiselect(
+                        "Selecione as métricas para visualizar",
+                        options=list(metric_options.keys()),
+                        default=["Gasto", "Conversões"]
+                    )
+                    
+                    if selected_metrics:
+                        # Buscar dados diários para a conta
+                        campaign_ids = combined_current_data[combined_current_data['account_id'] == account_id]['campaign_id'].unique()
+                        
+                        all_daily_data = []
+                        for campaign_id in campaign_ids:
+                            daily_data = fetch_daily_data(
+                                account_id, 
+                                token_acesso, 
+                                campaign_id, 
+                                start_date_str, 
+                                end_date_str
+                            )
+                            
+                            if daily_data is not None and not daily_data.empty:
+                                daily_data['campaign_id'] = campaign_id
+                                all_daily_data.append(daily_data)
+                        
+                        if all_daily_data:
+                            combined_daily_data = pd.concat(all_daily_data, ignore_index=True)
+                            
+                            # Agregar dados por dia
+                            daily_summary = combined_daily_data.groupby('date').agg({
+                                'spend': 'sum',
+                                'impressions': 'sum',
+                                'clicks': 'sum',
+                                'conversions': 'sum',
+                                'conversion_value': 'sum',
+                                'reach': 'sum'
+                            }).reset_index()
+                            
+                            # Gráfico de linha para métricas selecionadas
+                            fig_line = go.Figure()
+                            
+                            for metric_name in selected_metrics:
+                                metric_key = metric_options[metric_name]
+                                
+                                fig_line.add_trace(go.Scatter(
+                                    x=daily_summary['date'],
+                                    y=daily_summary[metric_key],
+                                    name=metric_name,
+                                    mode='lines+markers'
+                                ))
+                            
+                            fig_line.update_layout(
+                                title=f'Tendência diária - {account_name}',
+                                xaxis_title='Data',
+                                yaxis_title='Valor',
+                                legend=dict(
+                                    orientation="h",
+                                    yanchor="bottom",
+                                    y=1.02,
+                                    xanchor="right",
+                                    x=1
+                                )
+                            )
+                            
+                            st.plotly_chart(fig_line, use_container_width=True)
+                        else:
+                            st.warning("Não foi possível obter dados diários para esta conta.")
+                    else:
+                        st.warning("Selecione pelo menos uma métrica para visualizar.")
+                
+                # Tab 2: Desempenho por Campanha
+                with chart_tabs[1]:
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Gráfico de barras para campanhas por gasto
+                        top_campaigns = combined_current_data[combined_current_data['account_id'] == account_id].sort_values('spend', ascending=False).head(10)
+                        
+                        fig_bar_campaign = px.bar(
+                            top_campaigns,
+                            x='campaign_name',
+                            y='spend',
+                            title=f'Top 10 Campanhas por Gasto - {account_name}',
+                            color='conversions',
+                            color_continuous_scale='Viridis',
+                            hover_data=['clicks', 'conversions', 'cpa', 'roas'],
+                            labels={
+                                'campaign_name': 'Nome da Campanha',
+                                'spend': 'Valor Gasto',
+                                'clicks': 'Cliques',
+                                'conversions': 'Conversões',
+                                'cpa': 'CPA',
+                                'roas': 'ROAS'
+                            }
+                        )
+                        fig_bar_campaign.update_layout(
+                            xaxis_title="Nome da Campanha", 
+                            yaxis_title="Valor Gasto (R$)",
+                            xaxis={'categoryorder':'total descending'}
+                        )
+                        st.plotly_chart(fig_bar_campaign, use_container_width=True)
+                    
+                    with col2:
+                        # Gráfico de barras para campanhas por conversões
+                        top_conv_campaigns = combined_current_data[combined_current_data['account_id'] == account_id].sort_values('conversions', ascending=False).head(10)
+                        
+                        fig_bar_conv = px.bar(
+                            top_conv_campaigns,
+                            x='campaign_name',
+                            y='conversions',
+                            title=f'Top 10 Campanhas por Conversões - {account_name}',
+                            color='cpa',
+                            color_continuous_scale='RdYlGn_r',
+                            hover_data=['spend', 'clicks', 'cpa', 'roas'],
+                            labels={
+                                'campaign_name': 'Nome da Campanha',
+                                'conversions': 'Conversões',
+                                'spend': 'Valor Gasto',
+                                'clicks': 'Cliques',
+                                'cpa': 'CPA',
+                                'roas': 'ROAS'
+                            }
+                        )
+                        fig_bar_conv.update_layout(
+                            xaxis_title="Nome da Campanha", 
+                            yaxis_title="Conversões",
+                            xaxis={'categoryorder':'total descending'}
+                        )
+                        st.plotly_chart(fig_bar_conv, use_container_width=True)
+                    
+                    # Gráfico de dispersão para CPA vs ROAS
+                    fig_scatter = px.scatter(
+                        combined_current_data[combined_current_data['account_id'] == account_id],
+                        x='cpa',
+                        y='roas',
+                        size='spend',
+                        color='conversions',
+                        hover_name='campaign_name',
+                        title=f'CPA vs ROAS por Campanha - {account_name}',
+                        log_x=True,
+                        labels={
+                            'cpa': 'CPA (R$)',
+                            'roas': 'ROAS',
+                            'spend': 'Valor Gasto',
+                            'conversions': 'Conversões',
+                            'campaign_name': 'Nome da Campanha'
+                        }
+                    )
+                    
+                    # Adicionar linhas de referência
+                    fig_scatter.add_hline(y=benchmarks['roas']['bom'], line_dash="dash", line_color="green", annotation_text="ROAS Bom")
+                    fig_scatter.add_hline(y=benchmarks['roas']['atencao'], line_dash="dash", line_color="orange", annotation_text="ROAS Atenção")
+                    fig_scatter.add_vline(x=benchmarks['cpa']['bom'], line_dash="dash", line_color="green", annotation_text="CPA Bom")
+                    fig_scatter.add_vline(x=benchmarks['cpa']['atencao'], line_dash="dash", line_color="orange", annotation_text="CPA Atenção")
+                    
+                    fig_scatter.update_layout(
+                        xaxis_title="CPA (R$)",
+                        yaxis_title="ROAS"
+                    )
+                    
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+                
+                # Tab 3: Previsão de Tendências
+                with chart_tabs[2]:
+                    # Seletor de métricas para previsão
+                    selected_metrics = st.multiselect(
+                        "Selecione as métricas para prever",
+                        options=list(metric_options.keys()),
+                        default=["Gasto", "Conversões"],
+                        key="forecast_metrics"
+                    )
+                    
+                    # Adicionar seletor para tipo de visualização
+                    visualization_type = st.selectbox(
+                        "Tipo de visualização",
+                        options=["Gráfico", "Tabela"],
+                        index=0
+                    )
+                    
+                    if selected_metrics:
+                        # Buscar dados diários para a conta
+                        campaign_ids = combined_current_data[combined_current_data['account_id'] == account_id]['campaign_id'].unique()
+                        
+                        all_daily_data = []
+                        for campaign_id in campaign_ids:
+                            daily_data = fetch_daily_data(
+                                account_id, 
+                                token_acesso, 
+                                campaign_id, 
+                                start_date_str, 
+                                end_date_str
+                            )
+                            
+                            if daily_data is not None and not daily_data.empty:
+                                daily_data['campaign_id'] = campaign_id
+                                all_daily_data.append(daily_data)
+                        
+                        if all_daily_data:
+                            combined_daily_data = pd.concat(all_daily_data, ignore_index=True)
+                            
+                            # Agregar dados por dia
+                            daily_summary = combined_daily_data.groupby('date').agg({
+                                'spend': 'sum',
+                                'impressions': 'sum',
+                                'clicks': 'sum',
+                                'conversions': 'sum',
+                                'conversion_value': 'sum',
+                                'reach': 'sum'
+                            }).reset_index()
+                            
+                            # Gerar previsões para as métricas selecionadas
+                            st.markdown("### Previsão de tendências para os próximos 7 dias")
+                            st.markdown("*Baseado no crescimento/queda observado no período selecionado*")
+                            
+                            for metric_name in selected_metrics:
+                                metric_key = metric_options[metric_name]
+                                
+                                # Prever tendência futura
+                                predictions_df = predict_future_trends(daily_summary, metric_key)
+                                
+                                if predictions_df is not None:
+                                    st.markdown(f"#### {metric_name}")
+                                    
+                                    if visualization_type == "Gráfico":
+                                        # Combinar dados históricos e previsões
+                                        historical_data = daily_summary[['date', metric_key]].copy()
+                                        historical_data['tipo'] = 'Histórico'
+                                        
+                                        predictions_df['tipo'] = 'Previsão'
+                                        combined_data = pd.concat([historical_data, predictions_df])
+                                        
+                                        # Criar gráfico
+                                        fig_forecast = px.line(
+                                            combined_data,
+                                            x='date',
+                                            y=metric_key,
+                                            color='tipo',
+                                            title=f'Previsão de {metric_name} - {account_name}',
+                                            color_discrete_map={'Histórico': 'blue', 'Previsão': 'red'},
+                                            labels={
+                                                'date': 'Data',
+                                                metric_key: metric_name,
+                                                'tipo': 'Tipo de Dado'
+                                            }
+                                        )
+                                        
+                                        fig_forecast.update_layout(
+                                            xaxis_title="Data",
+                                            yaxis_title=f"{metric_name}",
+                                            legend_title="Tipo de Dado"
+                                        )
+                                        
+                                        st.plotly_chart(fig_forecast, use_container_width=True)
+                                    else:  # Tabela
+                                        # Mostrar tabela de previsões
+                                        # Formatar dados para exibição
+                                        display_predictions = predictions_df.copy()
+                                        display_predictions['date'] = display_predictions['date'].dt.strftime('%d/%m/%Y')
+                                        
+                                        if metric_key == 'spend' or metric_key == 'conversion_value':
+                                            display_predictions[metric_key] = display_predictions[metric_key].apply(lambda x: format_br(x, "R$ ", "", 2))
+                                        elif metric_key in ['impressions', 'clicks', 'conversions', 'reach']:
+                                            display_predictions[metric_key] = display_predictions[metric_key].apply(lambda x: format_br(x, "", "", 0))
+                                        else:
+                                            display_predictions[metric_key] = display_predictions[metric_key].apply(lambda x: format_br(x, "", "", 2))
+                                        
+                                        # Renomear colunas
+                                        display_predictions.columns = ['Data', metric_name, 'Tipo']
+                                        
+                                        st.dataframe(display_predictions[['Data', metric_name]], use_container_width=True)
+                                else:
+                                    st.warning(f"Dados insuficientes para prever tendência de {metric_name}")
+                        else:
+                            st.warning("Não foi possível obter dados diários para esta conta.")
+                    else:
+                        st.warning("Selecione pelo menos uma métrica para prever.")
+                
+                # Tab 4: Análise de Frequência
+                with chart_tabs[3]:
+                    # Análise de frequência e alcance
+                    st.markdown("### Análise de Frequência e Alcance")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Gráfico de frequência por campanha
+                        fig_freq = px.bar(
+                            combined_current_data[combined_current_data['account_id'] == account_id].sort_values('frequency', ascending=False),
+                            x='campaign_name',
+                            y='frequency',
+                            title=f'Frequência por Campanha - {account_name}',
+                            color='frequency',
+                            color_continuous_scale='RdYlGn_r',
+                            hover_data=['spend', 'impressions', 'reach'],
+                            labels={
+                                'campaign_name': 'Nome da Campanha',
+                                'frequency': 'Frequência',
+                                'spend': 'Valor Gasto',
+                                'impressions': 'Impressões',
+                                'reach': 'Alcance'
+                            }
+                        )
+                        
+                        # Adicionar linhas de referência
+                        fig_freq.add_hline(y=benchmarks['frequencia']['ideal_max'], line_dash="dash", line_color="red", annotation_text="Máximo Ideal")
+                        fig_freq.add_hline(y=benchmarks['frequencia']['ideal_min'], line_dash="dash", line_color="green", annotation_text="Mínimo Ideal")
+                        
+                        fig_freq.update_layout(
+                            xaxis_title="Nome da Campanha",
+                            yaxis_title="Frequência",
+                            xaxis={'categoryorder':'total descending'}
+                        )
+                        
+                        st.plotly_chart(fig_freq, use_container_width=True)
+                    
+                    with col2:
+                        # Gráfico de alcance por campanha
+                        fig_reach = px.bar(
+                            combined_current_data[combined_current_data['account_id'] == account_id].sort_values('reach', ascending=False).head(10),
+                            x='campaign_name',
+                            y='reach',
+                            title=f'Top 10 Campanhas por Alcance - {account_name}',
+                            color='frequency',
+                            color_continuous_scale='RdYlGn_r',
+                            hover_data=['spend', 'impressions', 'frequency'],
+                            labels={
+                                'campaign_name': 'Nome da Campanha',
+                                'reach': 'Alcance',
+                                'frequency': 'Frequência',
+                                'spend': 'Valor Gasto',
+                                'impressions': 'Impressões'
+                            }
+                        )
+                        
+                        fig_reach.update_layout(
+                            xaxis_title="Nome da Campanha",
+                            yaxis_title="Alcance",
+                            xaxis={'categoryorder':'total descending'}
+                        )
+                        
+                        st.plotly_chart(fig_reach, use_container_width=True)
+                    
+                    # Gráfico de dispersão para Alcance vs Frequência
+                    fig_scatter_reach = px.scatter(
+                        combined_current_data[combined_current_data['account_id'] == account_id],
+                        x='reach',
+                        y='frequency',
+                        size='spend',
+                        color='conversions',
+                        hover_name='campaign_name',
+                        title=f'Alcance vs Frequência por Campanha - {account_name}',
+                        log_x=True,
+                        labels={
+                            'reach': 'Alcance',
+                            'frequency': 'Frequência',
+                            'spend': 'Valor Gasto',
+                            'conversions': 'Conversões',
+                            'campaign_name': 'Nome da Campanha'
+                        }
+                    )
+                    
+                    # Adicionar linhas de referência
+                    fig_scatter_reach.add_hline(y=benchmarks['frequencia']['ideal_max'], line_dash="dash", line_color="red", annotation_text="Frequência Máxima Ideal")
+                    fig_scatter_reach.add_hline(y=benchmarks['frequencia']['ideal_min'], line_dash="dash", line_color="green", annotation_text="Frequência Mínima Ideal")
+                    
+                    fig_scatter_reach.update_layout(
+                        xaxis_title="Alcance",
+                        yaxis_title="Frequência"
+                    )
+                    
+                    st.plotly_chart(fig_scatter_reach, use_container_width=True)
+                
+                # Tab 5: Comparação de Evolução
+                with chart_tabs[4]:
+                    st.markdown("### Comparação de Evolução das Métricas")
+                    
+                    # Calcular tendências com base nos dados atuais e anteriores
+                    trend_data = pd.DataFrame({
+                        'Período': ['Atual', 'Anterior'],
+                        'Gasto': [total_spend, prev_total_spend],
+                        'Conversões': [total_conversions, prev_total_conversions],
+                        'Impressões': [total_impressions, prev_total_impressions],
+                        'Cliques': [total_clicks, prev_total_clicks],
+                        'Valor de Conversão': [total_conversion_value, prev_total_conversion_value],
+                        'Alcance': [total_reach, prev_total_reach]
+                    })
+                    
+                    # Gráfico de barras para comparação de períodos
+                    fig_bar_trend = px.bar(
+                        trend_data,
+                        x='Período',
+                        y=['Gasto', 'Conversões', 'Impressões', 'Cliques', 'Valor de Conversão', 'Alcance'],
+                        title=f'Comparação: {start_date.strftime("%d/%m/%Y")} a {end_date.strftime("%d/%m/%Y")} vs. Período Anterior',
+                        barmode='group',
+                        labels={
+                            'Período': 'Período',
+                            'value': 'Valor',
+                            'variable': 'Métrica'
+                        }
+                    )
+                    
+                    # Atualizar nomes dos eixos
+                    fig_bar_trend.update_layout(
+                        xaxis_title="Período",
+                        yaxis_title="Valor",
+                        legend_title="Métrica"
+                    )
+                    
+                    st.plotly_chart(fig_bar_trend, use_container_width=True)
+                    
+                    # Calcular variações percentuais para exibição
+                    trend_changes = pd.DataFrame({
+                        'Métrica': ['Gasto', 'Conversões', 'Impressões', 'Cliques', 'Valor de Conversão', 'Alcance', 'CTR', 'CPA', 'ROAS'],
+                        'Variação (%)': [delta_spend, delta_conversions, delta_impressions, delta_clicks, delta_conversion_value, delta_reach, delta_ctr, delta_cpa, delta_roas]
+                    })
+                    
+                    # Gráfico de barras para variações percentuais
+                    fig_bar_changes = px.bar(
+                        trend_changes,
+                        x='Métrica',
+                        y='Variação (%)',
+                        title='Variação Percentual em Relação ao Período Anterior',
+                        color='Variação (%)',
+                        color_continuous_scale=['red', 'yellow', 'green'],
+                        range_color=[-50, 50]
+                    )
+                    
+                    st.plotly_chart(fig_bar_changes, use_container_width=True)
             else:
-                st.session_state.dados_atuais = df
-                st.session_state.ultima_atualizacao = datetime.now()
-                placeholder_atualizacao.success("Dados atualizados com sucesso!")
+                # Visualizações para múltiplas contas
+                chart_tabs = st.tabs(["Desempenho por Conta", "Desempenho por Campanha", "Tendências"])
                 
-                # Limpar a mensagem após 3 segundos
-                time.sleep(3)
-                placeholder_atualizacao.empty()
+                # Tab 1: Desempenho por Conta
+                with chart_tabs[0]:
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # Gráfico de pizza para distribuição de orçamento
+                        fig_pie = px.pie(
+                            account_summary_df,
+                            values='total_spend',
+                            names='account_name',
+                            title='Distribuição de Orçamento por Conta',
+                            hole=0.4,
+                            color_discrete_sequence=px.colors.qualitative.Pastel,
+                            labels={
+                                'total_spend': 'Gasto Total',
+                                'account_name': 'Nome da Conta'
+                            }
+                        )
+                        fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                    
+                    with col2:
+                        # Gráfico de barras para CPA por conta
+                        fig_bar_cpa = px.bar(
+                            account_summary_df,
+                            x='account_name',
+                            y='avg_cpa',
+                            title='CPA Médio por Conta',
+                            color='avg_cpa',
+                            color_continuous_scale=['green', 'yellow', 'red'],
+                            range_color=[0, benchmarks['cpa']['atencao'] * 1.5],
+                            labels={
+                                'account_name': 'Nome da Conta',
+                                'avg_cpa': 'CPA Médio (R$)'
+                            }
+                        )
+                        fig_bar_cpa.update_layout(xaxis_title="Nome da Conta", yaxis_title="CPA (R$)")
+                        st.plotly_chart(fig_bar_cpa, use_container_width=True)
+                    
+                    # Gráfico de barras para métricas por conta
+                    metrics_by_account = pd.melt(
+                        account_summary_df,
+                        id_vars=['account_name'],
+                        value_vars=['total_spend', 'total_conversions', 'total_clicks', 'total_impressions'],
+                        var_name='metric',
+                        value_name='value'
+                    )
+                    
+                    # Mapear nomes de métricas para exibição
+                    metrics_by_account['metric'] = metrics_by_account['metric'].map({
+                        'total_spend': 'Gasto Total',
+                        'total_conversions': 'Total de Conversões',
+                        'total_clicks': 'Total de Cliques',
+                        'total_impressions': 'Total de Impressões'
+                    })
+                    
+                    fig_metrics = px.bar(
+                        metrics_by_account,
+                        x='account_name',
+                        y='value',
+                        color='metric',
+                        barmode='group',
+                        title='Métricas Principais por Conta',
+                        labels={
+                            'account_name': 'Nome da Conta',
+                            'value': 'Valor',
+                            'metric': 'Métrica'
+                        }
+                    )
+                    
+                    st.plotly_chart(fig_metrics, use_container_width=True)
                 
-                # Executar novamente o aplicativo para mostrar dados atualizados
-                st.rerun()
+                # Tab 2: Desempenho por Campanha
+                with chart_tabs[1]:
+                    # Top 10 campanhas por gasto
+                    top_campaigns = combined_current_data.sort_values('spend', ascending=False).head(10)
+                    
+                    # Gráfico de barras para desempenho de campanhas
+                    fig_bar_campaign = px.bar(
+                        top_campaigns,
+                        x='campaign_name',
+                        y='spend',
+                        title='Top 10 Campanhas por Gasto',
+                        color='conversions',
+                        color_continuous_scale='Viridis',
+                        hover_data=['clicks', 'conversions', 'cpa', 'roas'],
+                        labels={
+                            'campaign_name': 'Nome da Campanha',
+                            'spend': 'Valor Gasto',
+                            'clicks': 'Cliques',
+                            'conversions': 'Conversões',
+                            'cpa': 'CPA',
+                            'roas': 'ROAS'
+                        }
+                    )
+                    fig_bar_campaign.update_layout(xaxis_title="Nome da Campanha", yaxis_title="Valor Gasto (R$)")
+                    st.plotly_chart(fig_bar_campaign, use_container_width=True)
+                    
+                    # Gráfico de dispersão para CPA vs ROAS
+                    fig_scatter = px.scatter(
+                        combined_current_data,
+                        x='cpa',
+                        y='roas',
+                        size='spend',
+                        color='account_name',
+                        hover_name='campaign_name',
+                        title='CPA vs ROAS por Campanha',
+                        log_x=True,
+                        labels={
+                            'cpa': 'CPA (R$)',
+                            'roas': 'ROAS',
+                            'spend': 'Valor Gasto',
+                            'account_name': 'Nome da Conta',
+                            'campaign_name': 'Nome da Campanha'
+                        }
+                    )
+                    
+                    # Adicionar linhas de referência
+                    fig_scatter.add_hline(y=benchmarks['roas']['bom'], line_dash="dash", line_color="green", annotation_text="ROAS Bom")
+                    fig_scatter.add_hline(y=benchmarks['roas']['atencao'], line_dash="dash", line_color="orange", annotation_text="ROAS Atenção")
+                    fig_scatter.add_vline(x=benchmarks['cpa']['bom'], line_dash="dash", line_color="green", annotation_text="CPA Bom")
+                    fig_scatter.add_vline(x=benchmarks['cpa']['atencao'], line_dash="dash", line_color="orange", annotation_text="CPA Atenção")
+                    
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+                
+                # Tab 3: Tendências
+                with chart_tabs[2]:
+                    # Calcular tendências com base nos dados atuais e anteriores
+                    trend_data = pd.DataFrame({
+                        'Período': ['Atual', 'Anterior'],
+                        'Gasto': [total_spend, prev_total_spend],
+                        'Conversões': [total_conversions, prev_total_conversions],
+                        'Impressões': [total_impressions, prev_total_impressions],
+                        'Cliques': [total_clicks, prev_total_clicks],
+                        'Valor de Conversão': [total_conversion_value, prev_total_conversion_value],
+                        'Alcance': [total_reach, prev_total_reach]
+                    })
+                    
+                    # Gráfico de barras para comparação de períodos
+                    fig_bar_trend = px.bar(
+                        trend_data,
+                        x='Período',
+                        y=['Gasto', 'Conversões', 'Impressões', 'Cliques', 'Valor de Conversão', 'Alcance'],
+                        title=f'Comparação: {start_date.strftime("%d/%m/%Y")} a {end_date.strftime("%d/%m/%Y")} vs. Período Anterior',
+                        barmode='group',
+                        labels={
+                            'Período': 'Período',
+                            'value': 'Valor',
+                            'variable': 'Métrica'
+                        }
+                    )
+                    
+                    # Atualizar nomes dos eixos
+                    fig_bar_trend.update_layout(
+                        xaxis_title="Período",
+                        yaxis_title="Valor",
+                        legend_title="Métrica"
+                    )
+                    
+                    st.plotly_chart(fig_bar_trend, use_container_width=True)
+                    
+                    # Calcular variações percentuais para exibição
+                    trend_changes = pd.DataFrame({
+                        'Métrica': ['Gasto', 'Conversões', 'Impressões', 'Cliques', 'Valor de Conversão', 'Alcance', 'CTR', 'CPA', 'ROAS'],
+                        'Variação (%)': [delta_spend, delta_conversions, delta_impressions, delta_clicks, delta_conversion_value, delta_reach, delta_ctr, delta_cpa, delta_roas]
+                    })
+                    
+                    # Gráfico de barras para variações percentuais
+                    fig_bar_changes = px.bar(
+                        trend_changes,
+                        x='Métrica',
+                        y='Variação (%)',
+                        title='Variação Percentual em Relação ao Período Anterior',
+                        color='Variação (%)',
+                        color_continuous_scale=['red', 'yellow', 'green'],
+                        range_color=[-50, 50]
+                    )
+                    
+                    st.plotly_chart(fig_bar_changes, use_container_width=True)
+        
+        # Seção de Tabela
+        with table_container:
+            st.markdown("## 📋 Detalhes das Campanhas")
+            
+            # Preparar dados para exibição
+            display_data = combined_current_data[['account_name', 'campaign_name', 'status', 'updated_time', 
+                                                'spend', 'impressions', 'clicks', 'ctr', 'conversions', 
+                                                'conversion_value', 'cpa', 'cpc', 'roas', 'frequency', 'reach']]
+            
+            # Formatar colunas
+            display_data['updated_time'] = pd.to_datetime(display_data['updated_time']).dt.strftime('%d/%m/%Y %H:%M')
+            display_data['spend'] = display_data['spend'].apply(lambda x: format_br(x, "R$ ", "", 2))
+            display_data['ctr'] = display_data['ctr'].apply(lambda x: format_br(x*100, "", "%", 2))
+            display_data['cpa'] = display_data['cpa'].apply(lambda x: format_br(x, "R$ ", "", 2) if x > 0 else "N/A")
+            display_data['cpc'] = display_data['cpc'].apply(lambda x: format_br(x, "R$ ", "", 2) if x > 0 else "N/A")
+            display_data['roas'] = display_data['roas'].apply(lambda x: format_br(x, "", "", 2) if x > 0 else "N/A")
+            display_data['conversion_value'] = display_data['conversion_value'].apply(lambda x: format_br(x, "R$ ", "", 2) if x > 0 else "R$ 0,00")
+            display_data['impressions'] = display_data['impressions'].apply(lambda x: format_br(x, "", "", 0))
+            display_data['clicks'] = display_data['clicks'].apply(lambda x: format_br(x, "", "", 0))
+            display_data['conversions'] = display_data['conversions'].apply(lambda x: format_br(x, "", "", 0))
+            display_data['reach'] = display_data['reach'].apply(lambda x: format_br(x, "", "", 0))
+            display_data['frequency'] = display_data['frequency'].apply(lambda x: format_br(x, "", "", 2))
+            
+            # Renomear colunas para exibição
+            display_data.columns = ['Conta', 'Campanha', 'Status', 'Atualização da Campanha', 'Gasto', 
+                                   'Impressões', 'Cliques', 'CTR', 'Conversões', 
+                                   'Valor de Conversão', 'CPA', 'CPC', 'ROAS', 'Frequência', 'Alcance']
+            
+            # Exibir tabela com ordenação
+            st.dataframe(display_data, use_container_width=True, )
+            
+            # Funcionalidade de exportação
+            if st.button("Exportar dados detalhados"):
+                if export_format == "CSV":
+                    csv = combined_current_data.to_csv(index=False)
+                    st.download_button(
+                        label="Download CSV",
+                        data=csv,
+                        file_name=f"meta_ads_data_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
+                else:  # Excel
+                    # Para Excel, precisaríamos de bibliotecas adicionais
+                    buffer = StringIO()
+                    combined_current_data.to_csv(buffer, index=False)
+                    st.download_button(
+                        label="Download CSV (compatível com Excel)",
+                        data=buffer.getvalue(),
+                        file_name=f"meta_ads_data_{datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
+    else:
+        st.warning("Nenhum dado encontrado para as contas e filtros selecionados.")
 
 if __name__ == "__main__":
     main()
-    
